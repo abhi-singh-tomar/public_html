@@ -10,7 +10,7 @@
   const app = $('#app');
   const ALL_FIELDS = CFG.SECTIONS.flatMap(s => s.fields);
 
-  const S = { token: null, user: null, submission: null, files: [], imgCache: {}, adminMembers: null };
+  const S = { token: null, user: null, submissions: [], submission: null, files: [], imgCache: {}, adminMembers: null };
 
   /* ---------------- storage (safe) ---------------- */
   const store = {
@@ -57,7 +57,7 @@
   /* ---------------- session ---------------- */
   function saveSession() { store.set('pbj_session', { token: S.token, user: S.user }); }
   function logout(expired) {
-    S.token = null; S.user = null; S.submission = null; S.files = []; S.imgCache = {}; S.adminMembers = null;
+    S.token = null; S.user = null; S.submissions = []; S.submission = null; S.files = []; S.imgCache = {}; S.adminMembers = null;
     store.del('pbj_session');
     $('#topbar').hidden = true;
     renderLogin();
@@ -80,14 +80,13 @@
 
   async function loadMe() {
     const r = await api('me');
-    S.user = r.user; S.submission = r.submission; S.files = r.files || [];
+    S.user = r.user; S.submissions = r.submissions || [];
     saveSession();
   }
 
   function route() {
     $('#topbar').hidden = false;
     $('#who').textContent = S.user.name || S.user.email;
-    if (S.user.mustChange) return renderChangePw(true);
     if (S.user.role === 'admin') return renderAdmin();
     renderMember();
   }
@@ -99,7 +98,6 @@
     m.onclick = e => {
       const a = e.target.dataset.act;
       if (a === 'logout') logout();
-      if (a === 'change-pw') renderChangePw(false);
     };
   }
 
@@ -132,26 +130,22 @@
         <div class="tag">${esc(CFG.APP_SUBTITLE)}</div>
         <div class="card">
           <form id="loginForm" novalidate>
-            <div class="field"><label for="lEmail">Mobile number or email</label>
-              <input id="lEmail" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="10-digit mobile or email" required></div>
-            <div class="field"><label for="lPw">Password</label>
-              <input id="lPw" type="password" autocomplete="current-password" required></div>
+            <div class="field"><label for="lPhone">Mobile number</label>
+              <input id="lPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="10-digit mobile" required></div>
             <button class="btn btn-primary btn-block" type="submit">Log in</button>
           </form>
-          <button type="button" class="btn btn-ghost btn-block" id="getCode" style="margin-top:12px">First time / forgot password? Get a code</button>
-          <button type="button" class="btn btn-ghost btn-block" id="goRegister" style="margin-top:8px">New jury member? Register</button>
+          <button type="button" class="btn btn-ghost btn-block" id="goRegister" style="margin-top:12px">New jury member? Register</button>
         </div>
         <div class="foot muted small">${CFG.ORG_URL ? `<a href="${esc(CFG.ORG_URL)}" target="_blank" rel="noopener">${esc(CFG.ORG_NAME)}</a>` : esc(CFG.ORG_NAME)}</div>
       </div></div>`;
-    $('#getCode').onclick = () => renderCodeFlow($('#lEmail').value.trim());
     $('#goRegister').onclick = renderRegister;
     $('#loginForm').onsubmit = async e => {
       e.preventDefault();
-      const email = $('#lEmail').value.trim(), password = $('#lPw').value;
-      if (!email || !password) return toast('Enter your mobile number / email and password', true);
+      const phone = $('#lPhone').value.replace(/\D/g, '').slice(-10);
+      if (phone.length !== 10) return toast('Enter your 10-digit mobile number', true);
       busy(true, 'Logging in…');
       try {
-        const r = await api('login', { email, password });
+        const r = await api('loginByPhone', { phone });
         S.token = r.token; S.user = r.user; saveSession();
         await loadMe(); route();
       } catch (err) { toast(err.message, true); }
@@ -168,11 +162,11 @@
         <img class="logo" src="icons/logo-480.png" alt="" style="width:110px;height:110px">
         <div class="card" style="text-align:left">
           <h1>Register as a jury member</h1>
-          <p class="muted small" style="margin-top:0">The organising team will review and approve your registration. After approval, log in with <b>Get a code</b>.</p>
+          <p class="muted small" style="margin-top:0">The organising team will review and approve your registration. After approval, log in with your <b>mobile number</b>.</p>
           <form id="regForm" novalidate>
             <div class="field"><label for="rName">Full name <span class="req">*</span></label><input id="rName" type="text" autocomplete="name"></div>
-            <div class="field"><label for="rPhone">Mobile number (WhatsApp) <span class="req">*</span></label><input id="rPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="10-digit mobile"></div>
-            <div class="field"><label for="rEmail">Email</label><input id="rEmail" type="email" autocomplete="email" placeholder="Optional — codes can also come by email"></div>
+            <div class="field"><label for="rPhone">Mobile number <span class="req">*</span></label><input id="rPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="10-digit mobile"></div>
+            <div class="field"><label for="rEmail">Email</label><input id="rEmail" type="email" autocomplete="email" placeholder="Optional"></div>
             <div class="field"><label for="rArea">Area you will visit <span class="req">*</span></label><input id="rArea" type="text" placeholder="e.g. Behala, Joka"></div>
             <div class="field"><label for="rRef">Referred by</label><input id="rRef" type="text" placeholder="Optional"></div>
             <button class="btn btn-primary btn-block" type="submit">Submit registration</button>
@@ -198,117 +192,41 @@
   }
 
   /* ================================================================
-   *  ONE-TIME CODE (first login / forgot password)
-   * ================================================================ */
-  function renderCodeFlow(prefill) {
-    app.innerHTML = `
-      <div class="login-wrap"><div class="login" style="max-width:440px">
-        <img class="logo" src="icons/logo-480.png" alt="" style="width:110px;height:110px">
-        <div class="card" style="text-align:left">
-          <h1>Get a login code</h1>
-          <p class="muted small" style="margin-top:0">Enter the mobile number or email registered with the organisers.<br><b>Mobile:</b> tap <i>Get code on WhatsApp</i>, press <b>send</b> in WhatsApp, and the code arrives as a reply.<br><b>Email:</b> tap <i>Send code by email</i>.</p>
-          <form id="reqForm" novalidate>
-            <div class="field"><label for="cId">Mobile number or email</label>
-              <input id="cId" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" value="${esc(prefill || '')}" placeholder="10-digit mobile or email"></div>
-            <button class="btn btn-primary btn-block" type="button" id="waBtn">
-              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8s-.4-.1-.6.1-.7.8-.8 1-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.3-.4.3-.4.7-1.4.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.9 11.9 0 0 0 4.6 4c1.7.7 2.4.8 3.2.7a2.8 2.8 0 0 0 1.8-1.3 2.3 2.3 0 0 0 .2-1.3c-.1-.1-.3-.2-.5-.3z"/></svg>
-              Get code on WhatsApp</button>
-            <button class="btn btn-ghost btn-block" type="submit" id="sendBtn" style="margin-top:8px">Send code by email</button>
-          </form>
-          <form id="verForm" novalidate hidden style="margin-top:16px">
-            <div class="notice" id="sentMsg"></div>
-            <div class="field"><label for="cCode">6-digit code</label>
-              <input id="cCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••"></div>
-            <div class="field"><label for="cPw">New password</label><input id="cPw" type="password" autocomplete="new-password"><div class="hint">At least 8 characters</div></div>
-            <div class="field"><label for="cPw2">Confirm new password</label><input id="cPw2" type="password" autocomplete="new-password"></div>
-            <button class="btn btn-primary btn-block" type="submit">Set password &amp; log in</button>
-            <button class="btn btn-ghost btn-block" type="button" id="resend" style="margin-top:8px">Resend code</button>
-          </form>
-          <button class="btn btn-ghost btn-block" type="button" id="backLogin" style="margin-top:10px">← Back to login</button>
-        </div>
-      </div></div>`;
-    $('#backLogin').onclick = renderLogin;
-    const send = async () => {
-      const id = $('#cId').value.trim();
-      if (!id) return toast('Enter your mobile number or email', true);
-      busy(true, 'Sending code…');
-      try {
-        const r = await api('requestCode', { email: id });
-        $('#sentMsg').textContent = r.message || 'Code sent.';
-        $('#verForm').hidden = false; $('#resend').hidden = false; $('#sendBtn').textContent = 'Send again';
-        $('#cCode').focus();
-      } catch (err) { toast(err.message, true); }
-      finally { busy(false); }
-    };
-    $('#reqForm').onsubmit = e => { e.preventDefault(); send(); };
-    $('#waBtn').onclick = () => {
-      const id = $('#cId').value.trim(), digits = id.replace(/\D/g, '').slice(-10);
-      if (digits.length !== 10 || /@/.test(id)) return toast('Enter your 10-digit mobile number first', true);
-      const text = encodeURIComponent('LOGIN ' + digits + ' — please send my Paribesh Bandhu Jury Portal code');
-      const a = document.createElement('a');
-      a.href = 'https://wa.me/' + (CFG.WHATSAPP_NUMBER || '') + '?text=' + text; a.target = '_blank'; a.rel = 'noopener';
-      document.body.appendChild(a); a.click(); a.remove();
-      $('#sentMsg').innerHTML = 'WhatsApp opened — <b>press send</b> there. The 6-digit code will come back as a reply in a few seconds. Then enter it below.<br><span class="small">Send it from the same mobile number (' + esc(digits) + ').</span>';
-      $('#verForm').hidden = false; $('#resend').hidden = true;
-      setTimeout(() => $('#cCode').focus(), 300);
-    };
-    $('#resend').onclick = send;
-    $('#verForm').onsubmit = async e => {
-      e.preventDefault();
-      const code = $('#cCode').value.trim(), n = $('#cPw').value, n2 = $('#cPw2').value;
-      if (!/^\d{6}$/.test(code)) return toast('Enter the 6-digit code', true);
-      if (n.length < 8) return toast('Password must be at least 8 characters', true);
-      if (n !== n2) return toast('Passwords do not match', true);
-      busy(true, 'Verifying…');
-      try {
-        const r = await api('verifyCode', { email: $('#cId').value.trim(), code, newPassword: n });
-        S.token = r.token; S.user = r.user; saveSession();
-        toast('Password set ✓'); await loadMe(); route();
-      } catch (err) { toast(err.message, true); }
-      finally { busy(false); }
-    };
-  }
-
-  /* ================================================================
-   *  CHANGE PASSWORD
-   * ================================================================ */
-  function renderChangePw(forced) {
-    app.innerHTML = `
-      <div class="login-wrap"><div class="login" style="max-width:440px">
-        <div class="card" style="text-align:left">
-          <h1>${forced ? 'Set your password' : 'Change password'}</h1>
-          ${forced ? '<div class="notice">Welcome! Please replace the temporary password you were given with one of your own.</div>' : ''}
-          <form id="pwForm" novalidate>
-            <div class="field"><label for="pOld">${forced ? 'Temporary password' : 'Current password'}</label><input id="pOld" type="password" autocomplete="current-password"></div>
-            <div class="field"><label for="pNew">New password</label><input id="pNew" type="password" autocomplete="new-password" minlength="8"><div class="hint">At least 8 characters</div></div>
-            <div class="field"><label for="pNew2">Confirm new password</label><input id="pNew2" type="password" autocomplete="new-password"></div>
-            <div class="row">
-              ${forced ? '' : '<button type="button" class="btn btn-ghost" id="pCancel">Cancel</button>'}
-              <button class="btn btn-primary" type="submit" style="flex:1">Save password</button>
-            </div>
-          </form>
-        </div>
-      </div></div>`;
-    if (!forced) $('#pCancel').onclick = route;
-    $('#pwForm').onsubmit = async e => {
-      e.preventDefault();
-      const o = $('#pOld').value, n = $('#pNew').value, n2 = $('#pNew2').value;
-      if (n.length < 8) return toast('New password must be at least 8 characters', true);
-      if (n !== n2) return toast('Passwords do not match', true);
-      busy(true, 'Saving…');
-      try {
-        const r = await api('changePassword', { oldPassword: o, newPassword: n });
-        S.token = r.token; S.user = r.user; saveSession();
-        toast('Password updated'); route();
-      } catch (err) { toast(err.message, true); }
-      finally { busy(false); }
-    };
-  }
-
-  /* ================================================================
    *  JURY MEMBER VIEW
    * ================================================================ */
-  function draftKey() { return 'pbj_draft_' + S.user.email; }
+  function draftKey() { return 'pbj_draft_' + S.user.email + '_' + (S.submission ? S.submission.id : 'new'); }
+
+  /** "My committees": every committee form this jury member has started. */
+  function renderMember() {
+    const list = S.submissions || [];
+    app.innerHTML = `
+      <div class="row" style="margin-bottom:12px">
+        <div><h1>Your committee reports</h1><div class="muted small">One form per committee — each committee gets its own folder for photos &amp; documents.</div></div>
+        <div class="spacer"></div><button class="btn btn-primary" id="newSub">+ New committee</button>
+      </div>
+      <div class="card">${list.length ? `<div class="table-wrap"><table class="responsive"><thead><tr><th>Committee</th><th>Area</th><th>Status</th><th>Files</th><th>Updated</th></tr></thead><tbody>
+        ${list.map(s => `<tr class="click" data-id="${esc(s.id)}"><td data-l="Committee"><b>${esc(s.committeeName || '—')}</b></td><td data-l="Area">${esc(s.area || '—')}</td>
+          <td data-l="Status">${statusBadge(s.status)}</td><td data-l="Files">${s.photos} 📷 · ${s.documents} 📎</td><td data-l="Updated">${fmtDate(s.updatedAt)}</td></tr>`).join('')}
+        </tbody></table></div>` : '<div class="muted">No committee forms yet. Tap <b>+ New committee</b> to start.</div>'}</div>`;
+    $('#newSub').onclick = () => openSubmission(null);
+    $$('tr.click', app).forEach(tr => tr.onclick = () => openSubmission(tr.dataset.id));
+  }
+
+  async function openSubmission(id) {
+    if (!id) { S.submission = null; S.files = []; return renderSubmission(); }
+    busy(true, 'Loading…');
+    try { const r = await api('getSubmission', { id }); S.submission = r.submission; S.files = r.files || []; renderSubmission(); }
+    catch (err) { toast(err.message, true); }
+    finally { busy(false); }
+  }
+
+  async function backToList() {
+    busy(true, 'Loading…');
+    try { await loadMe(); } catch (err) { toast(err.message, true); }
+    finally { busy(false); }
+    S.submission = null; S.files = [];
+    renderMember();
+  }
 
   function currentValues() {
     const saved = (S.submission && S.submission.data) || {};
@@ -338,16 +256,18 @@
     return `<div class="field"><label for="${id}">${esc(f.label)}${req}</label>${input}${f.hint ? `<div class="hint">${esc(f.hint)}</div>` : ''}</div>`;
   }
 
-  function renderMember() {
+  /** One committee form (new when S.submission is null). */
+  function renderSubmission() {
     const v = currentValues();
     const sub = S.submission;
     const status = sub ? sub.status : 'Not started';
     app.innerHTML = `
+      <button class="btn btn-ghost btn-sm" id="backList" style="margin-bottom:12px">← My committees</button>
       <div class="row" style="margin-bottom:12px">
-        <div><h1>Your submission</h1><div class="muted small">${sub ? 'Last saved ' + fmtDate(sub.updatedAt) : 'Fill in the details and add photographs & documents.'}</div></div>
+        <div><h1>${sub ? esc(sub.committeeName || 'Committee') : 'New committee'}</h1><div class="muted small">${sub ? 'Last saved ' + fmtDate(sub.updatedAt) : 'Fill in the details and add photographs & documents.'}</div></div>
         <div class="spacer"></div>${statusBadge(status)}
       </div>
-      ${status === 'Submitted' ? '<div class="notice">Submitted. You can still update details or add files — changes are logged.</div>' : ''}
+      ${status === 'Submitted' ? '<div class="notice">Submitted. You can still update details or add files — changes are logged. <button type="button" class="btn btn-primary btn-sm" id="another" style="margin-left:6px">+ Start another committee</button></div>' : ''}
       <div class="grid grid-main">
         <form class="card" id="subForm" novalidate>
           ${CFG.SECTIONS.map(s => `<div class="section-title"><span class="dot"></span><h2 style="margin:0">${esc(s.title)}</h2></div>${s.fields.map(f => fieldHTML(f, v[f.key])).join('')}`).join('')}
@@ -388,6 +308,8 @@
         </div>
       </div>`;
 
+    $('#backList').onclick = backToList;
+    if ($('#another')) $('#another').onclick = () => openSubmission(null);
     const form = $('#subForm');
     form.addEventListener('input', () => store.set(draftKey(), readForm()));
     $('#saveDraft').onclick = () => saveSubmission('Draft');
@@ -419,7 +341,7 @@
     let firstBad = null;
     ALL_FIELDS.forEach(f => {
       const el = $('#f_' + f.key); if (!el) return;
-      const need = all ? f.required : (f.key === 'memberName' || f.key === 'area');
+      const need = all ? f.required : (f.key === 'committeeName' || f.key === 'area');
       const bad = need && !el.value.trim();
       el.classList.toggle('invalid', bad);
       if (bad && !firstBad) firstBad = el;
@@ -430,15 +352,16 @@
 
   async function saveSubmission(status, quiet) {
     if (!validate(status === 'Submitted')) {
-      toast(status === 'Submitted' ? 'Please fill all required fields' : 'Name and area are needed to save', true);
+      toast(status === 'Submitted' ? 'Please fill all required fields' : 'Committee name and area are needed to save', true);
       return false;
     }
     busy(true, status === 'Submitted' ? 'Submitting…' : 'Saving…');
     try {
-      const r = await api('saveSubmission', { data: readForm(), status });
-      S.submission = r.submission; S.files = r.files || S.files;
-      store.del(draftKey());
-      if (!quiet) { toast(status === 'Submitted' ? 'Submission saved ✓' : 'Draft saved'); renderMember(); }
+      const key = draftKey();
+      const r = await api('saveSubmission', { id: S.submission ? S.submission.id : '', data: readForm(), status });
+      S.submission = r.submission; S.files = r.files || S.files; S.submissions = r.submissions || S.submissions;
+      store.del(key);
+      if (!quiet) { toast(status === 'Submitted' ? 'Committee submitted ✓' : 'Draft saved'); renderSubmission(); }
       return true;
     } catch (err) { toast(err.message, true); return false; }
     finally { busy(false); }
@@ -451,11 +374,11 @@
     if (!S.submission) {
       const ok = await saveSubmission('Draft', true);
       if (!ok) return;
-      const keep = readForm(); renderMember(); fillForm(keep);
+      const keep = readForm(); renderSubmission(); fillForm(keep);
     }
     if (kind === 'photo') {
       const have = S.files.filter(f => f.kind === 'photo').length;
-      if (have + files.length > CFG.MAX_PHOTOS) return toast(`Maximum ${CFG.MAX_PHOTOS} photos`, true);
+      if (have + files.length > CFG.MAX_PHOTOS) return toast(`Maximum ${CFG.MAX_PHOTOS} photos per committee`, true);
     }
     const prog = $(kind === 'photo' ? '#photoProg' : '#docProg');
     prog.hidden = false; const bar = prog.firstElementChild;
@@ -477,6 +400,7 @@
           payload = { kind, name, mimeType: mime, base64: await fileToBase64(blob) };
         }
         const before = new Set(S.files.map(x => x.id));
+        payload.submissionId = S.submission.id;
         const r = await api('uploadFile', payload);
         S.files = r.files;
         if (kind === 'photo') { const nf = S.files.find(x => !before.has(x.id)); if (nf) S.imgCache[nf.id] = S._lastPhotoData; }
@@ -669,7 +593,7 @@
         doc.text(`${CFG.APP_NAME} · ${CFG.ORG_NAME}`, M, 292);
         doc.text(`Page ${p} of ${pages}`, W - M, 292, { align: 'right' });
       }
-      const nm = `${CFG.APP_NAME}_${data.memberName || user.name || 'jury'}_${data.area || ''}`.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_');
+      const nm = `${CFG.APP_NAME}_${data.committeeName || data.memberName || user.name || 'jury'}_${data.area || ''}`.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_');
       doc.save(nm + '.pdf');
       toast('PDF downloaded');
     } catch (err) { toast(err.message, true); }
@@ -695,9 +619,9 @@
       if (!S.adminMembers || force) S.adminMembers = (await api('adminList')).members;
       const pend = S.adminMembers.filter(x => x.pending);
       const m = S.adminMembers.filter(x => x.role !== 'admin' && !x.pending && !x.rejected);
-      const sub = m.filter(x => x.status === 'Submitted').length, dr = m.filter(x => x.status === 'Draft').length;
+      const com = m.reduce((a, x) => a + (x.committees || 0), 0), sub = m.reduce((a, x) => a + (x.submitted || 0), 0);
       $('#stats').innerHTML = [
-        [m.length, 'Jury members'], [sub, 'Submitted'], [dr, 'Drafts'], [m.length - sub - dr, 'Not started'],
+        [m.length, 'Jury members'], [com, 'Committees'], [sub, 'Submitted'], [com - sub, 'Drafts'], [m.filter(x => !x.committees).length, 'Members not started'],
         [m.reduce((a, x) => a + x.photos, 0), 'Photos'], [m.reduce((a, x) => a + x.documents, 0), 'Documents']
       ].map(([n, l]) => `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
       renderPending(pend);
@@ -737,22 +661,23 @@
         <select id="as" style="width:auto"><option value="">All statuses</option>${['Submitted', 'Draft', 'Not started'].map(s => `<option ${adminFilter.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select>
         <button class="btn btn-ghost btn-sm" id="csv">Export CSV</button>
       </div>
-      <div class="table-wrap"><table class="responsive"><thead><tr><th>Member</th><th>Area</th><th>Status</th><th>Files</th><th>Updated</th><th>Last login</th></tr></thead><tbody id="mt"></tbody></table></div>`;
+      <div class="table-wrap"><table class="responsive"><thead><tr><th>Member</th><th>Areas</th><th>Status</th><th>Committees</th><th>Files</th><th>Updated</th><th>Last login</th></tr></thead><tbody id="mt"></tbody></table></div>`;
     const draw = () => {
       const q = adminFilter.q.toLowerCase();
       const rows = all.filter(x => (!adminFilter.status || x.status === adminFilter.status) &&
         (!q || [x.name, x.memberName, x.email, x.location, x.phone].join(' ').toLowerCase().includes(q)));
       $('#mt').innerHTML = rows.length ? rows.map(x => `<tr class="click" data-email="${esc(x.email)}">
           <td data-l="Member"><b>${esc(x.memberName || x.name || '—')}</b><br><span class="muted small">${esc(x.email)}${x.phone ? ' · ' + esc(x.phone) : ''}</span></td>
-          <td data-l="Area">${esc(x.location || '—')}</td><td data-l="Status">${statusBadge(x.status)}</td>
+          <td data-l="Areas">${esc(x.location || x.assignedArea || '—')}</td><td data-l="Status">${statusBadge(x.status)}</td>
+          <td data-l="Committees">${x.committees || 0}${x.committees ? ` <span class="muted small">(${x.submitted || 0} submitted)</span>` : ''}</td>
           <td data-l="Files">${x.photos} 📷 · ${x.documents} 📎</td><td data-l="Updated">${fmtDate(x.updatedAt)}</td><td data-l="Last login">${fmtDate(x.lastLogin)}</td></tr>`).join('')
-        : '<tr><td colspan="6" class="muted">No matching members.</td></tr>';
+        : '<tr><td colspan="7" class="muted">No matching members.</td></tr>';
       $$('#mt tr.click').forEach(tr => tr.onclick = () => renderAdminDetail(tr.dataset.email));
     };
     $('#aq').oninput = e => { adminFilter.q = e.target.value; draw(); };
     $('#as').onchange = e => { adminFilter.status = e.target.value; draw(); };
     $('#csv').onclick = () => {
-      const cols = ['memberName', 'email', 'phone', 'location', 'status', 'photos', 'documents', 'updatedAt', 'lastLogin', 'folderUrl'];
+      const cols = ['memberName', 'email', 'phone', 'location', 'status', 'committees', 'submitted', 'photos', 'documents', 'updatedAt', 'lastLogin'];
       const csv = [cols.join(',')].concat(all.map(x => cols.map(c => `"${String(x[c] == null ? '' : x[c]).replace(/"/g, '""')}"`).join(','))).join('\n');
       const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' }));
       a.download = 'paribesh-jury-members.csv'; a.click();
@@ -767,38 +692,32 @@
       : '<tr><td colspan="4" class="muted">No activity yet.</td></tr>'}</tbody></table></div>`;
   }
 
+  /** Admin: one jury member and the list of their committee forms. */
   async function renderAdminDetail(email) {
     busy(true, 'Loading…');
     let r;
     try { r = await api('adminGet', { email }); } catch (err) { busy(false); return toast(err.message, true); }
     busy(false);
     const meta = (S.adminMembers || []).find(x => x.email === email) || {};
-    const sub = r.submission, data = (sub && sub.data) || {};
+    const list = r.submissions || [];
     app.innerHTML = `
       <button class="btn btn-ghost btn-sm" id="back" style="margin-bottom:12px">← All members</button>
-      <div class="row" style="margin-bottom:12px"><div><h1>${esc(data.memberName || r.user.name || email)}</h1><div class="muted small">${esc(email)} · Last login ${fmtDate(meta.lastLogin)}</div></div><div class="spacer"></div>${statusBadge(sub ? sub.status : '')}</div>
+      <div class="row" style="margin-bottom:12px"><div><h1>${esc(r.user.name || email)}</h1><div class="muted small">${esc(email)}${r.user.phone ? ' · ' + esc(r.user.phone) : ''} · Last login ${fmtDate(meta.lastLogin)}</div></div><div class="spacer"></div>${statusBadge(meta.status)}</div>
       <div class="grid grid-main">
-        <div class="card">
-          ${sub ? CFG.SECTIONS.map(s => `<div class="section-title"><span class="dot"></span><h2 style="margin:0">${esc(s.title)}</h2></div>
-            <dl class="kv">${s.fields.map(f => `<dt>${esc(f.label)}</dt><dd>${esc(data[f.key] || '—')}</dd>`).join('')}</dl>`).join('<div style="height:10px"></div>')
-            : '<div class="muted">This member has not started their submission.</div>'}
-          ${sub ? `<p class="muted small" style="margin-top:14px">Created ${fmtDate(sub.createdAt)} · Updated ${fmtDate(sub.updatedAt)}</p>` : ''}
+        <div class="card"><h2>Committees (${list.length})</h2>
+          ${list.length ? `<div class="table-wrap"><table class="responsive"><thead><tr><th>Committee</th><th>Area</th><th>Status</th><th>Files</th><th>Updated</th></tr></thead><tbody>
+            ${list.map(s => `<tr class="click" data-id="${esc(s.id)}"><td data-l="Committee"><b>${esc(s.committeeName || '—')}</b></td><td data-l="Area">${esc(s.area || '—')}</td>
+              <td data-l="Status">${statusBadge(s.status)}</td><td data-l="Files">${s.photos} 📷 · ${s.documents} 📎</td><td data-l="Updated">${fmtDate(s.updatedAt)}</td></tr>`).join('')}
+            </tbody></table></div>` : '<div class="muted">This member has not started any committee form.</div>'}
         </div>
         <div>
           <div class="card"><h2>Actions</h2><div class="actions-bar">
-            ${meta.folderUrl ? `<a class="btn btn-ghost btn-sm" href="${esc(meta.folderUrl)}" target="_blank" rel="noopener">📁 Open Drive folder</a>` : ''}
-            <button class="btn btn-ghost btn-sm" id="aPdf" ${sub ? '' : 'disabled'}>⬇ PDF report</button>
-            <button class="btn btn-ghost btn-sm" id="aRole">${meta.role === 'admin' ? 'Change to jury' : 'Make admin'}</button>
-            <button class="btn btn-danger btn-sm" id="aReset">Reset password</button></div>
-            <p class="muted small" style="margin:8px 0 0">Role: <b>${esc(meta.role || 'jury')}</b></p>
-            <div id="resetOut"></div></div>
-          <div class="card"><h2>Photographs (${r.files.filter(f => f.kind === 'photo').length})</h2><div class="thumbs" id="thumbs"></div></div>
-          <div class="card"><h2>Documents</h2><ul class="files" id="docList"></ul></div>
+            <button class="btn btn-ghost btn-sm" id="aRole">${meta.role === 'admin' ? 'Change to jury' : 'Make admin'}</button></div>
+            <p class="muted small" style="margin:8px 0 0">Role: <b>${esc(meta.role || 'jury')}</b></p></div>
         </div>
       </div>`;
     $('#back').onclick = () => renderAdmin();
-    renderFiles(app, r.files, false);
-    $('#aPdf').onclick = () => makePdf(r.user, sub, r.files);
+    $$('tr.click', app).forEach(tr => tr.onclick = () => renderAdminSubmission(email, tr.dataset.id));
     $('#aRole').onclick = async () => {
       const role = meta.role === 'admin' ? 'jury' : 'admin';
       if (!confirmBox(role === 'admin' ? `Make ${email} an ADMIN? They will see all members' data.` : `Change ${email} to jury (remove admin access)?`)) return;
@@ -807,99 +726,130 @@
       catch (err) { toast(err.message, true); }
       finally { busy(false); }
     };
-    $('#aReset').onclick = async () => {
-      if (!confirmBox(`Reset the password for ${email}? They will need the new temporary password to log in.`)) return;
-      busy(true, 'Resetting…');
-      try {
-        const x = await api('adminResetPassword', { email });
-        $('#resetOut').innerHTML = `<div class="notice" style="margin-top:12px">Temporary password for <b>${esc(x.email)}</b>:<br><code style="font-size:1.1rem">${esc(x.tempPassword)}</code><br><span class="small">Share it privately. They will be asked to change it on login.</span></div>`;
-      } catch (err) { toast(err.message, true); }
-      finally { busy(false); }
-    };
+  }
+
+  /** Admin: one committee form with its details, photos and documents. */
+  async function renderAdminSubmission(email, id) {
+    busy(true, 'Loading…');
+    let r;
+    try { r = await api('getSubmission', { id }); } catch (err) { busy(false); return toast(err.message, true); }
+    busy(false);
+    const sub = r.submission, data = sub.data || {};
+    const member = (S.adminMembers || []).find(x => x.email === email) || { email, name: sub.memberName };
+    app.innerHTML = `
+      <button class="btn btn-ghost btn-sm" id="back" style="margin-bottom:12px">← ${esc(member.name || email)}</button>
+      <div class="row" style="margin-bottom:12px"><div><h1>${esc(sub.committeeName || 'Committee')}</h1><div class="muted small">${esc(sub.location || '')} · Jury: ${esc(sub.memberName || member.name || email)}</div></div><div class="spacer"></div>${statusBadge(sub.status)}</div>
+      <div class="grid grid-main">
+        <div class="card">
+          ${CFG.SECTIONS.map(s => `<div class="section-title"><span class="dot"></span><h2 style="margin:0">${esc(s.title)}</h2></div>
+            <dl class="kv">${s.fields.map(f => `<dt>${esc(f.label)}</dt><dd>${esc(data[f.key] || '—')}</dd>`).join('')}</dl>`).join('<div style="height:10px"></div>')}
+          <p class="muted small" style="margin-top:14px">Created ${fmtDate(sub.createdAt)} · Updated ${fmtDate(sub.updatedAt)}</p>
+        </div>
+        <div>
+          <div class="card"><h2>Actions</h2><div class="actions-bar">
+            ${sub.folderUrl ? `<a class="btn btn-ghost btn-sm" href="${esc(sub.folderUrl)}" target="_blank" rel="noopener">📁 Open Drive folder</a>` : ''}
+            <button class="btn btn-ghost btn-sm" id="aPdf">⬇ PDF report</button></div></div>
+          <div class="card"><h2>Photographs (${r.files.filter(f => f.kind === 'photo').length})</h2><div class="thumbs" id="thumbs"></div></div>
+          <div class="card"><h2>Documents</h2><ul class="files" id="docList"></ul></div>
+        </div>
+      </div>`;
+    $('#back').onclick = () => renderAdminDetail(email);
+    renderFiles(app, r.files, false);
+    $('#aPdf').onclick = () => makePdf(member, sub, r.files);
   }
 
   /* ================================================================
    *  DEMO BACKEND (only used when API_URL is not set)
    * ================================================================ */
   const Mock = {
-    key: 'pbj_demo_db',
+    key: 'pbj_demo_db2',
     files: {},
     db() {
       let d = store.get(this.key);
       if (!d) {
         d = { users: {
-          'jury@demo.in': { email: 'jury@demo.in', name: 'Demo Jury Member', phone: '9800000000', role: 'jury', pw: 'demo1234', mustChange: false },
-          'admin@demo.in': { email: 'admin@demo.in', name: 'Demo Admin', phone: '', role: 'admin', pw: 'admin1234', mustChange: false },
-          'new@demo.in': { email: 'new@demo.in', name: 'New Member', phone: '9811111111', role: 'jury', pw: 'temp1234', mustChange: true }
+          '9800000000': { email: '9800000000', name: 'Demo Jury Member', phone: '9800000000', role: 'jury' },
+          '9822222222': { email: '9822222222', name: 'Demo Admin', phone: '9822222222', role: 'admin' }
         }, subs: {}, files: [], log: [] };
         store.set(this.key, d);
       }
       return d;
     },
     save(d) { store.set(this.key, d); },
-    pub(u) { return { email: u.email, name: u.name, phone: u.phone, role: u.role, mustChange: u.mustChange }; },
+    pub(u) { return { email: u.email, name: u.name, phone: u.phone, role: u.role, mustChange: false }; },
     log(d, u, a, det) { d.log.push({ time: new Date().toISOString(), email: u.email, name: u.name, action: a, details: det || '' }); },
-    myFiles(d, e) { return d.files.filter(f => f.email === e && !f.deleted).map(({ id, name, mimeType, kind, sizeKB, uploadedAt }) => ({ id, name, mimeType, kind, sizeKB, uploadedAt })); },
+    subFiles(d, id) { return d.files.filter(f => f.sub === id && !f.deleted).map(({ id, name, mimeType, kind, sizeKB, uploadedAt }) => ({ id, name, mimeType, kind, sizeKB, uploadedAt })); },
+    summaries(d, email, withFolder) {
+      return Object.values(d.subs).filter(s => s.email === email).map(s => {
+        const fs = this.subFiles(d, s.id);
+        return { id: s.id, committeeName: s.committeeName, area: s.location, status: s.status, createdAt: s.createdAt, updatedAt: s.updatedAt,
+          photos: fs.filter(f => f.kind === 'photo').length, documents: fs.filter(f => f.kind !== 'photo').length, folderUrl: withFolder ? 'https://drive.google.com/' : undefined };
+      }).sort((a, b) => a.updatedAt < b.updatedAt ? 1 : -1);
+    },
     async handle(b) {
       await new Promise(r => setTimeout(r, 150));
       const d = this.db();
-      if (b.action === 'login') {
-        const u = d.users[String(b.email).toLowerCase()];
-        if (!u || u.pw !== b.password) return { ok: false, error: 'Incorrect email or password' };
+      if (b.action === 'loginByPhone') {
+        const ph = String(b.phone).replace(/\D/g, '').slice(-10);
+        const u = Object.values(d.users).find(x => String(x.phone || '').replace(/\D/g, '').slice(-10) === ph);
+        if (!u) return { ok: false, error: 'This mobile number is not registered' };
+        if (u.pending) return { ok: false, error: 'Your registration is awaiting approval' };
+        if (u.rejected) return { ok: false, error: 'Your registration was not approved' };
         u.lastLogin = new Date().toISOString(); this.log(d, u, 'LOGIN'); this.save(d);
         return { ok: true, token: 'demo:' + u.email, user: this.pub(u) };
       }
       if (b.action === 'register') {
         const ph = String(b.phone).replace(/\D/g, '').slice(-10);
         if (d.users[ph]) return { ok: false, error: 'Already registered' };
-        d.users[ph] = { email: ph, name: b.name, phone: ph, role: 'jury', pw: '', pending: true, assignedArea: b.area, reference: b.reference, altEmail: b.emailAddr, source: new Date().toLocaleString() };
+        d.users[ph] = { email: ph, name: b.name, phone: ph, role: 'jury', pending: true, assignedArea: b.area, reference: b.reference, altEmail: b.emailAddr, source: new Date().toLocaleString() };
         this.save(d); return { ok: true, message: 'Registration received. You will be able to log in once the organisers approve it.' };
-      }
-      if (b.action === 'requestCode') { this.otp = { id: String(b.email).toLowerCase(), code: '123456' }; return { ok: true, message: 'Demo: your code is 123456' }; }
-      if (b.action === 'verifyCode') {
-        const x = d.users[String(b.email).toLowerCase()];
-        if (!x || b.code !== '123456') return { ok: false, error: 'Incorrect code' };
-        x.pw = b.newPassword; x.mustChange = false; this.save(d);
-        return { ok: true, token: 'demo:' + x.email, user: this.pub(x) };
       }
       const u = b.token && d.users[String(b.token).replace('demo:', '')];
       if (!u) return { ok: false, error: 'Session expired', code: 'AUTH' };
       const now = new Date().toISOString();
       switch (b.action) {
         case 'logout': return { ok: true };
-        case 'me': return { ok: true, user: this.pub(u), submission: d.subs[u.email] || null, files: this.myFiles(d, u.email) };
-        case 'changePassword':
-          if (b.oldPassword !== u.pw) return { ok: false, error: 'Current password is incorrect' };
-          u.pw = b.newPassword; u.mustChange = false; this.log(d, u, 'PASSWORD_CHANGED'); this.save(d);
-          return { ok: true, token: b.token, user: this.pub(u) };
+        case 'me': return { ok: true, user: this.pub(u), submissions: this.summaries(d, u.email) };
+        case 'getSubmission': {
+          const s = d.subs[b.id];
+          if (!s || (s.email !== u.email && u.role !== 'admin')) return { ok: false, error: 'Committee form not found' };
+          return { ok: true, submission: Object.assign({}, s, { folderUrl: u.role === 'admin' ? 'https://drive.google.com/' : undefined }), files: this.subFiles(d, s.id) };
+        }
         case 'saveSubmission': {
-          const s = d.subs[u.email];
+          if (!b.data.committeeName || !b.data.area) return { ok: false, error: 'Committee name and area are needed to save' };
+          const s = b.id ? d.subs[b.id] : null;
+          if (b.id && (!s || s.email !== u.email)) return { ok: false, error: 'Committee form not found' };
+          const id = s ? s.id : 'S' + Date.now().toString(36);
           const st = s && s.status === 'Submitted' ? 'Submitted' : b.status;
-          d.subs[u.email] = { data: b.data, status: st, memberName: b.data.memberName, location: b.data.area, createdAt: s ? s.createdAt : now, updatedAt: now };
-          this.log(d, u, s ? (b.status === 'Submitted' ? 'SUBMITTED' : 'SUBMISSION_UPDATED') : 'SUBMISSION_CREATED', `${b.data.memberName} - ${b.data.area}`);
+          d.subs[id] = { id, email: u.email, data: b.data, status: st, committeeName: b.data.committeeName, memberName: b.data.memberName, location: b.data.area, createdAt: s ? s.createdAt : now, updatedAt: now };
+          this.log(d, u, s ? (b.status === 'Submitted' ? 'SUBMITTED' : 'SUBMISSION_UPDATED') : 'SUBMISSION_CREATED', `${b.data.committeeName} - ${b.data.area}`);
           this.save(d);
-          return { ok: true, user: this.pub(u), submission: d.subs[u.email], files: this.myFiles(d, u.email) };
+          return { ok: true, submission: d.subs[id], files: this.subFiles(d, id), submissions: this.summaries(d, u.email) };
         }
         case 'uploadFile': {
+          const s = d.subs[b.submissionId];
+          if (!s || s.email !== u.email) return { ok: false, error: 'Please save the committee details before uploading files' };
+          if (b.kind === 'photo' && this.subFiles(d, s.id).filter(f => f.kind === 'photo').length >= CFG.MAX_PHOTOS) return { ok: false, error: `Maximum ${CFG.MAX_PHOTOS} photos per committee` };
           const id = 'f' + Date.now() + Math.random().toString(36).slice(2, 6);
           const sizeKB = Math.round(b.base64.length * 0.75 / 1024);
-          d.files.push({ id, email: u.email, name: b.name, mimeType: b.mimeType, kind: b.kind, sizeKB, uploadedAt: now });
-          this.files[id] = b; this.log(d, u, 'UPLOAD', `${b.kind}: ${b.name} (${sizeKB} KB)`); this.save(d);
-          return { ok: true, files: this.myFiles(d, u.email) };
+          d.files.push({ id, sub: s.id, email: u.email, name: b.name, mimeType: b.mimeType, kind: b.kind, sizeKB, uploadedAt: now });
+          this.files[id] = b; this.log(d, u, 'UPLOAD', `${s.committeeName} — ${b.kind}: ${b.name} (${sizeKB} KB)`); this.save(d);
+          return { ok: true, files: this.subFiles(d, s.id) };
         }
-        case 'deleteFile': { const f = d.files.find(x => x.id === b.fileId && x.email === u.email); if (f) { f.deleted = true; this.log(d, u, 'FILE_DELETED', f.name); } this.save(d); return { ok: true, files: this.myFiles(d, u.email) }; }
+        case 'deleteFile': { const f = d.files.find(x => x.id === b.fileId && x.email === u.email); if (f) { f.deleted = true; this.log(d, u, 'FILE_DELETED', f.name); } this.save(d); return { ok: true, files: f ? this.subFiles(d, f.sub) : [] }; }
         case 'getFile': { const f = this.files[b.fileId]; if (!f) return { ok: false, error: 'Demo files are kept only until the page is reloaded' }; return { ok: true, mimeType: f.mimeType, base64: f.base64 }; }
       }
       if (u.role !== 'admin') return { ok: false, error: 'Not permitted' };
       switch (b.action) {
         case 'adminSetRole': { d.users[b.email].role = b.role === 'admin' ? 'admin' : 'jury'; this.save(d); return this.handle({ action: 'adminList', token: b.token }); }
         case 'adminApprove': { const x = d.users[b.email]; if (b.approve === false) x.rejected = true; else x.role = b.role === 'admin' ? 'admin' : 'jury'; x.pending = false; this.save(d); return this.handle({ action: 'adminList', token: b.token }); }
-        case 'adminList': return { ok: true, members: Object.values(d.users).map(x => { const s = d.subs[x.email]; const fs = this.myFiles(d, x.email);
-          return { pending: !!x.pending, rejected: !!x.rejected, assignedArea: x.assignedArea, reference: x.reference, altEmail: x.altEmail, source: x.source, email: x.email, name: x.name, phone: x.phone, role: x.role, lastLogin: x.lastLogin || '', status: s ? s.status : 'Not started', location: s ? s.location : '', memberName: s ? s.memberName : x.name,
-            folderUrl: s ? 'https://drive.google.com/' : '', updatedAt: s ? s.updatedAt : '', photos: fs.filter(f => f.kind === 'photo').length, documents: fs.filter(f => f.kind !== 'photo').length }; }) };
-        case 'adminGet': { const x = d.users[b.email]; return { ok: true, user: x ? this.pub(x) : { email: b.email }, submission: d.subs[b.email] || null, files: this.myFiles(d, b.email) }; }
+        case 'adminList': return { ok: true, members: Object.values(d.users).map(x => {
+          const subs = this.summaries(d, x.email), submitted = subs.filter(s => s.status === 'Submitted').length;
+          return { pending: !!x.pending, rejected: !!x.rejected, assignedArea: x.assignedArea, reference: x.reference, altEmail: x.altEmail, source: x.source, email: x.email, name: x.name, phone: x.phone, role: x.role, lastLogin: x.lastLogin || '',
+            committees: subs.length, submitted, status: !subs.length ? 'Not started' : (submitted ? 'Submitted' : 'Draft'), location: subs.map(s => s.area).filter(Boolean).join(', '), memberName: x.name,
+            updatedAt: subs.length ? subs[0].updatedAt : '', photos: subs.reduce((a, s) => a + s.photos, 0), documents: subs.reduce((a, s) => a + s.documents, 0) }; }) };
+        case 'adminGet': { const x = d.users[b.email]; return { ok: true, user: x ? this.pub(x) : { email: b.email }, submissions: this.summaries(d, b.email, true) }; }
         case 'adminLog': return { ok: true, log: d.log.slice(-300).reverse() };
-        case 'adminResetPassword': { const x = d.users[b.email]; x.pw = 'Temp' + Math.floor(1000 + Math.random() * 9000); x.mustChange = true; this.log(d, u, 'ADMIN_PASSWORD_RESET', x.email); this.save(d); return { ok: true, email: x.email, tempPassword: x.pw }; }
       }
       return { ok: false, error: 'Unknown action' };
     }

@@ -5,10 +5,7 @@
 window.APP_CONFIG = {
   // Paste the Apps Script Web App URL (ends in /exec).
   // Leave as-is to run in DEMO mode (data stays in this browser only).
-  API_URL: 'https://script.google.com/macros/s/AKfycbyW0kFCoIT2H7c83g4WkOmN26IJeVo--A2VUHtjFJv0PeO07ldXD5n1CqEVa-f9HkER9Q/exec',
-
-  // WhatsApp business number that replies with login codes (country code + number, no +)
-  WHATSAPP_NUMBER: '919147375801',
+  API_URL: 'https://script.google.com/macros/s/AKfycbyPzjclmWpHI_CaPl2-ilOYRU9T3Hnm-aYeilOD4mijLAStjreANOPc407gBpzE2Qhq/exec',
 
   APP_NAME: 'Paribesh Bandhu',
   APP_SUBTITLE: 'Jury Portal',
@@ -19,15 +16,15 @@ window.APP_CONFIG = {
   PHOTO_MAX_SIDE: 1600,     // px, longest side
   PHOTO_QUALITY: 0.78,      // JPEG quality 0–1
   PHOTO_TARGET_KB: 450,     // tries to stay under this
-  MAX_PHOTOS: 30,
+  MAX_PHOTOS: 10,           // per committee form
   MAX_DOC_MB: 15,
 
   /* ----------------------------------------------------------
    *  FORM FIELDS — DRAFT, to be confirmed against the committee
    *  write-up. Add / remove / reorder freely.
    *  type: text | tel | email | number | date | textarea | select
-   *  'memberName' and 'area' are used to name the Drive folder
-   *  ("Name - Area") — keep those two keys.
+   *  'committeeName' and 'area' are used to name each committee's
+   *  Drive folder ("Committee - Area") — keep those two keys.
    * ---------------------------------------------------------- */
   SECTIONS: [
     {
