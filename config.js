@@ -16,7 +16,9 @@ window.APP_CONFIG = {
   PHOTO_MAX_SIDE: 1600,     // px, longest side
   PHOTO_QUALITY: 0.78,      // JPEG quality 0–1
   PHOTO_TARGET_KB: 450,     // tries to stay under this
-  MAX_PHOTOS: 10,           // per committee form
+  MAX_PHOTOS: 15,           // per committee form
+  MAX_VIDEOS: 8,            // per committee form
+  MAX_VIDEO_MB: 200,        // per video (keep in step with Code.gs)
   MAX_DOC_MB: 15,
 
   /* ----------------------------------------------------------
@@ -32,7 +34,7 @@ window.APP_CONFIG = {
       fields: [
         { key: 'memberName', label: 'Full name', type: 'text', required: true, prefill: 'name' },
         { key: 'phone', label: 'Mobile number', type: 'tel', required: true, prefill: 'phone' },
-        { key: 'email', label: 'Email (optional)', type: 'email', prefill: 'email' }
+        { key: 'email', label: 'Email (optional)', type: 'email', prefill: 'contactEmail' }
       ]
     },
     {
