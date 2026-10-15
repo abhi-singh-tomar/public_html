@@ -44,16 +44,26 @@
   const blobToDataURL = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(b); });
 
   /* ---------------- API ---------------- */
-  async function api(action, payload = {}) {
+  // Read-only actions: safe to send again when Google is briefly busy or the connection drops
+  const RETRY_OK = new Set(['me', 'getSubmission', 'listCommittees', 'getFile', 'getThumbs', 'adminList', 'adminGet', 'adminLog']);
+  const BUSY_ERR = /timed out|too many|simultaneous|try again|service|busy|exceeded|unavailable/i;
+
+  async function api(action, payload = {}, retried) {
     const body = Object.assign({ action, token: S.token }, payload);
-    let res;
+    let res, err;
     if (DEMO) res = await Mock.handle(body);
     else {
       let r;
       try {
         r = await fetch(CFG.API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body), redirect: 'follow' });
-      } catch (e) { throw new Error('No internet connection. Please try again.'); }
-      try { res = await r.json(); } catch (e) { throw new Error('Server error. Please try again.'); }
+        // when Google is overloaded it answers with an HTML page instead of JSON
+        try { res = await r.json(); } catch (e) { err = 'The server is busy. Please try again.'; }
+      } catch (e) { err = 'No internet connection. Please try again.'; }
+    }
+    if (res && !res.ok && res.code !== 'AUTH' && BUSY_ERR.test(res.error || '')) err = res.error;
+    if (err) {
+      if (RETRY_OK.has(action) && !retried) { await new Promise(ok => setTimeout(ok, 1200)); return api(action, payload, true); }
+      const e = new Error(err); e.offline = true; throw e;
     }
     if (!res.ok) {
       if (res.code === 'AUTH') { logout(true); }
@@ -63,10 +73,13 @@
   }
 
   /* ---------------- session ---------------- */
-  function saveSession() { store.set('pbj_session', { token: S.token, user: S.user }); }
+  // the committee list is saved too, so the app can show it straight away on the next visit
+  function saveSession() { store.set('pbj_session', { token: S.token, user: S.user, submissions: S.submissions, storage: S.storage }); }
   function logout(expired) {
+    if (!S.token) return;   // already logged out (several requests can report an expired session at once)
     S.token = null; S.user = null; S.submissions = []; S.submission = null; S.files = []; S.imgCache = {}; S.adminMembers = null; S.adminEdit = null; S.storage = null; S.totals = null; S.otherCommittees = null;
     store.del('pbj_session');
+    Thumbs.clear();
     $('#topbar').hidden = true;
     renderLogin();
     if (expired) toast('Session expired — please log in again', true);
@@ -78,12 +91,43 @@
     $('#demoBanner').hidden = !DEMO;
     setupMenu();
     setupInstall();
+    resume();
+  }
+
+  /** Re-opens a saved session. Only a real "session expired" reply from the server logs the user out —
+   *  a slow or failed connection keeps them logged in. */
+  async function resume() {
     const sess = store.get('pbj_session');
-    if (sess && sess.token) {
-      S.token = sess.token; S.user = sess.user;
-      try { await loadMe(); route(); return; } catch (e) { /* falls through */ }
+    if (!sess || !sess.token) return renderLogin();
+    S.token = sess.token; S.user = sess.user;
+    if (sess.user) {
+      S.submissions = sess.submissions || []; S.storage = sess.storage || null;
+      route();          // last known screen, instantly
+      refreshMe();      // then bring it up to date
+      return;
     }
-    renderLogin();
+    busy(true, 'Loading…');
+    try { await loadMe(); route(); }
+    catch (e) { if (S.token) renderRetry(e.message); }
+    finally { busy(false); }
+  }
+
+  async function refreshMe() {
+    const before = JSON.stringify([S.user, S.submissions, S.storage]);
+    try { await loadMe(); } catch (e) { if (S.token && e.offline) toast('Could not reach the server — showing your saved data', true); return; }
+    if (JSON.stringify([S.user, S.submissions, S.storage]) === before) return;
+    $('#who').textContent = S.user.name || S.user.email;
+    if (S.user.role !== 'admin' && $('#newSub')) renderMember();   // only when the list is still on screen
+  }
+
+  function renderRetry(msg) {
+    app.innerHTML = `
+      <div class="login-wrap"><div class="login"><div class="card">
+        <h1>Couldn't connect</h1>
+        <p class="muted">${esc(msg)} You are still logged in.</p>
+        <button class="btn btn-primary btn-block" id="retry">Try again</button>
+      </div></div></div>`;
+    $('#retry').onclick = resume;
   }
 
   async function loadMe() {
@@ -614,7 +658,7 @@
         payload.submissionId = S.submission.id;
         const r = await api('uploadFile', payload);
         setFiles(r);
-        if (kind === 'photo') { const nf = S.files.find(x => !before.has(x.id)); if (nf) S.imgCache[nf.id] = S._lastPhotoData; }
+        if (kind === 'photo') { const nf = S.files.find(x => !before.has(x.id)); if (nf) S.imgCache[nf.id] = Thumbs.mem[nf.id] = S._lastPhotoData; }
       } catch (err) { failed++; toast(err.message, true); }
       done++;
       bar.style.width = Math.round((done / files.length) * 100) + '%';
@@ -977,8 +1021,8 @@
     if ($('#photoCount', container)) $('#photoCount', container).textContent = count(photos.length, 'photo', CFG.MAX_PHOTOS);
     if ($('#videoCount', container)) $('#videoCount', container).textContent = count(videos.length, 'video', CFG.MAX_VIDEOS);
     if (vlist) {
-      // videos are too big to preview in the app; admins get a Drive link
-      vlist.innerHTML = videos.length ? videos.map(v => `<li><span class="ficon">🎥</span><span class="nm" title="${esc(v.name)}">${esc(v.name)}
+      // videos are too big to play in the app (only a preview picture); admins get a Drive link
+      vlist.innerHTML = videos.length ? videos.map(v => `<li><button type="button" class="vthumb" data-gal="${esc(v.id)}" aria-label="View video">${thumbImg(v.id)}<span class="play" aria-hidden="true">▶</span></button><span class="nm" title="${esc(v.name)}">${esc(v.name)}
           <br><span class="muted small">${kb(v.sizeKB)}${v.compressed ? ` (compressed from ${kb(v.originalSizeKB)})` : ''} · uploaded ${fmtDate(v.uploadedAt)}</span>
           ${v.caption ? `<br><span class="small">${esc(v.caption)}</span>` : ''}${evidenceLine(v) ? `<br><span class="muted small">${evidenceLine(v)}</span>` : ''}</span>
           ${canEdit ? `<button class="btn btn-ghost btn-sm" data-meta="${esc(v.id)}" title="Caption, sections, location">✎ Details</button>` : ''}
@@ -986,12 +1030,12 @@
         : '<li class="muted small">No videos yet.</li>';
     }
     if (thumbs) {
-      thumbs.innerHTML = photos.length ? photos.map(p => `<div class="thumb-wrap"><div class="thumb" data-id="${esc(p.id)}">${S.imgCache[p.id] ? `<img src="${S.imgCache[p.id]}" alt="${esc(p.caption || p.name)}">` : '<div class="ph">Loading…</div>'}
+      thumbs.innerHTML = photos.length ? photos.map(p => `<div class="thumb-wrap"><div class="thumb" data-id="${esc(p.id)}" data-gal="${esc(p.id)}">${thumbImg(p.id, p.caption || p.name)}
           ${canEdit ? `<button class="x" data-del="${esc(p.id)}" aria-label="Delete photo">×</button><button class="ed" data-meta="${esc(p.id)}" aria-label="Photo details" title="Caption, sections, location">✎</button>` : ''}</div>
           ${p.caption || evidenceLine(p) ? `<div class="thumb-cap small">${p.caption ? esc(p.caption) + ' ' : ''}<span class="muted">${evidenceLine(p)}</span></div>` : ''}</div>`).join('')
         : '<div class="muted small" style="grid-column:1/-1">No photos yet.</div>';
-      photos.filter(p => !S.imgCache[p.id]).forEach(p => loadThumb(p.id, thumbs));
     }
+    loadThumbs(photos.concat(videos));
     if (list) {
       list.innerHTML = docs.length ? docs.map(d => `<li><span class="ficon">${esc(ext(d.name))}</span><span class="nm" title="${esc(d.name)}">${esc(d.name)}<br><span class="muted small">${kb(d.sizeKB)} · ${fmtDate(d.uploadedAt)}</span></span>
           <button class="btn btn-ghost btn-sm" data-open="${esc(d.id)}">View</button>${canEdit ? `<button class="btn btn-danger btn-sm" data-del="${esc(d.id)}" aria-label="Delete">✕</button>` : ''}</li>`).join('')
@@ -1000,7 +1044,12 @@
     $$('[data-del]', container).forEach(b => b.onclick = () => deleteFile(b.dataset.del));
     $$('[data-meta]', container).forEach(b => b.onclick = () => metaDialog(files.find(f => f.id === b.dataset.meta)));
     $$('[data-open]', container).forEach(b => b.onclick = () => openFile(b.dataset.open, files));
-    $$('.thumb img', container).forEach(img => img.onclick = () => lightbox(img.src, (files.find(f => f.id === img.closest('.thumb').dataset.id) || {}).caption));
+    // photos then videos, in one swipeable gallery
+    const media = photos.concat(videos);
+    $$('[data-gal]', container).forEach(el => el.onclick = e => {
+      if (e.target.closest('button') && e.target.closest('button') !== el) return;   // the ✎ / × buttons on a tile
+      openGallery(media, media.findIndex(f => f.id === el.dataset.gal));
+    });
   }
 
   /** Optional caption, A–L checklist and location for one photo/video. */
@@ -1070,20 +1119,93 @@
   }
   function updateStorageUI() { const b = $('#storageBox'); if (b) b.innerHTML = storageHTML(S.storage); }
 
-  async function loadThumb(id, root) {
+  /* ---------------- thumbnails: small previews, fetched in one request per committee and kept on the phone ---------------- */
+  const Thumbs = {
+    mem: {},      // id → data URL
+    none: {},     // id → when Drive last had no preview (videos still processing); asked again after 2 minutes
+    open() {
+      return this.p || (this.p = new Promise(res => {
+        setTimeout(() => res(null), 1500);   // some private-browsing modes never answer
+        try {
+          const r = indexedDB.open('pbj-thumbs', 1);
+          r.onupgradeneeded = () => r.result.createObjectStore('t');
+          r.onsuccess = () => res(r.result); r.onerror = () => res(null);
+        } catch (e) { res(null); }
+      }));
+    },
+    async getMany(ids) {
+      const db = await this.open(), out = {};
+      if (!db || !ids.length) return out;
+      return new Promise(res => {
+        try {
+          const t = db.transaction('t'), st = t.objectStore('t');
+          ids.forEach(id => { const q = st.get(id); q.onsuccess = () => { if (q.result) out[id] = q.result; }; });
+          t.oncomplete = t.onerror = t.onabort = () => res(out);
+        } catch (e) { res(out); }
+      });
+    },
+    async putMany(map) {
+      const db = await this.open();
+      if (db) try { const st = db.transaction('t', 'readwrite').objectStore('t'); Object.keys(map).forEach(k => st.put(map[k], k)); } catch (e) {}
+    },
+    async clear() {
+      this.mem = {}; this.none = {};
+      const db = await this.open();
+      if (db) try { db.transaction('t', 'readwrite').objectStore('t').clear(); } catch (e) {}
+    }
+  };
+  const loadingThumb = {};
+  let serverThumbs = true;   // false when the server is an older Code.gs without getThumbs
+
+  const thumbSrc = id => Thumbs.mem[id] || S.imgCache[id] || '';
+  /** <img> that fills in by itself when its preview arrives (see showThumb). */
+  const thumbImg = (id, alt) => `<img data-thumb="${esc(id)}" ${thumbSrc(id) ? `src="${thumbSrc(id)}"` : ''} alt="${esc(alt || '')}" draggable="false">`;
+  function showThumb(id) { $$(`img[data-thumb="${CSS.escape(id)}"]`).forEach(i => { i.src = Thumbs.mem[id]; }); }
+
+  async function loadThumbs(files) {
+    const need = files.filter(f => !Thumbs.mem[f.id] && !loadingThumb[f.id] && !(Date.now() - (Thumbs.none[f.id] || 0) < 120000));
+    if (!need.length) return;
+    need.forEach(f => (loadingThumb[f.id] = true));
     try {
-      const r = await api('getFile', { fileId: id });
-      S.imgCache[id] = `data:${r.mimeType};base64,${r.base64}`;
-      const t = root.querySelector(`.thumb[data-id="${CSS.escape(id)}"]`);
-      if (t) { const ph = t.querySelector('.ph'); if (ph) { const img = new Image(); img.src = S.imgCache[id]; img.alt = ''; img.onclick = () => lightbox(img.src); ph.replaceWith(img); } }
-    } catch (e) { /* ignore */ }
+      const saved = await Thumbs.getMany(need.map(f => f.id));
+      Object.keys(saved).forEach(id => { Thumbs.mem[id] = saved[id]; showThumb(id); });
+      let rest = need.filter(f => !saved[f.id]);
+      for (let i = 0; serverThumbs && i < rest.length; i += 15) {
+        const part = rest.slice(i, i + 15), got = {};
+        try {
+          const r = await api('getThumbs', { ids: part.map(f => f.id) });
+          part.forEach(f => {
+            const t = (r.thumbs || {})[f.id];
+            if (t) { Thumbs.mem[f.id] = got[f.id] = t; showThumb(f.id); } else Thumbs.none[f.id] = Date.now();
+          });
+          Thumbs.putMany(got);
+        } catch (e) { if (/unknown action/i.test(e.message)) serverThumbs = false; else break; }
+      }
+      // photos Drive has no preview for (or an older server): use the full photo, two at a time
+      const photos = rest.filter(f => f.kind === 'photo' && !Thumbs.mem[f.id]);
+      const worker = async () => {
+        for (let f; (f = photos.shift());) {
+          try { Thumbs.mem[f.id] = await fullImage(f.id); delete Thumbs.none[f.id]; showThumb(f.id); } catch (e) {}
+        }
+      };
+      await Promise.all([worker(), worker()]);
+    } finally { need.forEach(f => delete loadingThumb[f.id]); }
+  }
+
+  /** Full-size photo (only when it is opened in the gallery, or for the PDF). */
+  const loadingFull = {};
+  function fullImage(id) {
+    if (S.imgCache[id]) return Promise.resolve(S.imgCache[id]);
+    return loadingFull[id] || (loadingFull[id] = api('getFile', { fileId: id })
+      .then(r => (S.imgCache[id] = `data:${r.mimeType};base64,${r.base64}`))
+      .finally(() => delete loadingFull[id]));
   }
 
   async function deleteFile(id) {
     const f = S.files.find(x => x.id === id);
     if (!f || !confirmBox(`Delete “${f.name}”?`)) return;
     busy(true, 'Deleting…');
-    try { const r = await api('deleteFile', { fileId: id }); setFiles(r); delete S.imgCache[id]; renderFiles(); updateStorageUI(); toast('Deleted'); }
+    try { const r = await api('deleteFile', { fileId: id }); setFiles(r); delete S.imgCache[id]; delete Thumbs.mem[id]; renderFiles(); updateStorageUI(); toast('Deleted'); }
     catch (err) { toast(err.message, true); }
     finally { busy(false); }
   }
@@ -1104,10 +1226,101 @@
     finally { busy(false); }
   }
 
-  function lightbox(src, caption) {
-    const d = document.createElement('div'); d.className = 'lightbox';
-    d.innerHTML = `<img src="${src}" alt="${esc(caption || '')}">${caption ? `<div class="lb-cap">${esc(caption)}</div>` : ''}`;
-    d.onclick = () => d.remove(); document.body.appendChild(d);
+  /* ---------------- gallery: swipe between photos & videos, thumbnail reel below ---------------- */
+  function openGallery(items, start) {
+    if (!items.length) return;
+    let cur = -1;
+    const g = document.createElement('div');
+    g.className = 'gallery';
+    g.setAttribute('role', 'dialog'); g.setAttribute('aria-modal', 'true'); g.setAttribute('aria-label', 'Photos and videos');
+    g.innerHTML = `
+      <div class="g-top"><span class="g-count" aria-live="polite"></span><button type="button" class="g-btn g-close" aria-label="Close">✕</button></div>
+      <div class="g-track">${items.map(f => `<div class="g-slide">${thumbImg(f.id, f.caption || f.name)}
+        ${f.kind === 'video' ? `<div class="g-video"><span class="g-play" aria-hidden="true">▶</span>${f.url
+          ? `<a class="btn btn-primary btn-sm" href="${esc(f.url)}" target="_blank" rel="noopener">Play in Google Drive</a>`
+          : '<span class="small">Video uploaded ✓ — the organisers can play it in Drive</span>'}</div>` : ''}</div>`).join('')}</div>
+      <button type="button" class="g-btn g-prev" aria-label="Previous">‹</button>
+      <button type="button" class="g-btn g-next" aria-label="Next">›</button>
+      <div class="g-cap"></div>
+      <div class="g-reel">${items.map((f, i) => `<button type="button" class="g-th${f.kind === 'video' ? ' vid' : ''}" data-i="${i}" aria-label="${f.kind === 'video' ? 'Video' : 'Photo'} ${i + 1}">${thumbImg(f.id)}</button>`).join('')}</div>`;
+    document.body.appendChild(g);
+    document.body.classList.add('noscroll');
+    const track = $('.g-track', g), reel = $('.g-reel', g), slides = track.children, ths = reel.children;
+
+    const go = (i, smooth) => {
+      track.scrollTo({ left: Math.max(0, Math.min(items.length - 1, i)) * track.clientWidth, behavior: smooth ? 'smooth' : 'auto' });
+      setTimeout(update, smooth ? 450 : 0);   // in case the browser sends no scroll event
+    };
+    const loadFull = i => {
+      const f = items[i], img = slides[i] && slides[i].querySelector('img');
+      if (!f || f.kind !== 'photo' || img.dataset.full) return;
+      img.dataset.full = '1';
+      fullImage(f.id).then(src => { img.removeAttribute('data-thumb'); img.src = src; }).catch(() => delete img.dataset.full);
+    };
+    const update = () => {
+      const i = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+      if (i === cur || !items[i]) return;
+      cur = i;
+      const f = items[i];
+      $('.g-count', g).textContent = `${i + 1} / ${items.length}`;
+      $('.g-cap', g).innerHTML = [f.caption ? esc(f.caption) : '', evidenceLine(f)].filter(Boolean).join('<br>');
+      $$('.g-th.on', reel).forEach(t => t.classList.remove('on'));
+      const th = ths[i]; th.classList.add('on');
+      reel.scrollTo({ left: th.offsetLeft - reel.clientWidth / 2 + th.offsetWidth / 2, behavior: 'smooth' });
+      $('.g-prev', g).disabled = i === 0; $('.g-next', g).disabled = i === items.length - 1;
+      loadFull(i); loadFull(i + 1); loadFull(i - 1);   // the one on screen first, then its neighbours
+    };
+    // live while swiping, plus a timer in case animation frames are paused (battery saver)
+    let raf, tm;
+    track.addEventListener('scroll', () => {
+      cancelAnimationFrame(raf); raf = requestAnimationFrame(update);
+      clearTimeout(tm); tm = setTimeout(update, 120);
+    }, { passive: true });
+
+    // touch: swipe left/right is native scrolling; swipe down closes; a tap hides/shows the controls
+    let sx = 0, sy = null;
+    track.addEventListener('touchstart', e => { if (e.touches.length === 1) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; } else sy = null; }, { passive: true });
+    track.addEventListener('touchmove', e => {
+      if (sy == null) return;
+      const dy = e.touches[0].clientY - sy, dx = Math.abs(e.touches[0].clientX - sx);
+      if (dy > 10 && dy > dx * 1.5) { track.style.transform = `translateY(${dy}px)`; g.style.opacity = Math.max(.4, 1 - dy / 500); }
+    }, { passive: true });
+    track.addEventListener('touchend', e => {
+      if (sy == null) return;
+      const dy = e.changedTouches[0].clientY - sy, dx = Math.abs(e.changedTouches[0].clientX - sx);
+      sy = null;
+      if (dy > 90 && dy > dx * 1.5) return close();
+      track.style.transform = ''; g.style.opacity = '';
+    }, { passive: true });
+    track.addEventListener('click', e => { if (!e.target.closest('a')) g.classList.toggle('bare'); });
+
+    reel.addEventListener('click', e => { const b = e.target.closest('.g-th'); if (b) go(Number(b.dataset.i), true); });
+    $('.g-prev', g).onclick = () => go(cur - 1, true);
+    $('.g-next', g).onclick = () => go(cur + 1, true);
+    $('.g-close', g).onclick = () => close();
+    const onKey = e => {
+      if (e.key === 'Escape') close();
+      else if (e.key === 'ArrowLeft') go(cur - 1, true);
+      else if (e.key === 'ArrowRight') go(cur + 1, true);
+    };
+    const onResize = () => go(cur);
+    // the phone's Back button closes the gallery instead of leaving the page
+    const onPop = () => close(true);
+    history.pushState({ pbjGallery: 1 }, '');
+    window.addEventListener('popstate', onPop);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', onResize);
+    function close(fromBack) {
+      window.removeEventListener('popstate', onPop);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onResize);
+      g.remove(); document.body.classList.remove('noscroll');
+      if (!fromBack && history.state && history.state.pbjGallery) history.back();
+    }
+
+    go(start > 0 ? start : 0);
+    update();
+    $('.g-close', g).focus({ preventScroll: true });
   }
 
   /* ================================================================

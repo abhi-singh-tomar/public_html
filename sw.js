@@ -2,7 +2,7 @@
  * Caches the app shell so it opens instantly and installs as an app.
  * API calls (script.google.com) are never cached.
  * Bump VERSION whenever you deploy changed files. */
-const VERSION = 'pbj-v1.13.0';
+const VERSION = 'pbj-v1.14.0';
 const SHELL = [
   './', 'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/logo-480.png', 'icons/favicon-32.png', 'icons/apple-touch-icon.png'
@@ -10,7 +10,8 @@ const SHELL = [
 const CDN = 'https://cdnjs.cloudflare.com/';
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // cache: 'reload' skips the browser's HTTP cache, so a new version never picks up last week's styles.css
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
