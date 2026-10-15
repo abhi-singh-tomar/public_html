@@ -745,30 +745,71 @@
   /* ================================================================
    *  ADMIN VIEW
    * ================================================================ */
-  let adminTab = 'members', adminFilter = { q: '', status: '' };
+  let adminTab = 'members', adminFilter = { q: '', status: '' }, comFilter = { q: '', status: '', media: '' };
 
-  async function renderAdmin(force) {
+  /** Stores an adminList / adminApprove / adminSetRole response. */
+  function setAdminData(r) { S.adminMembers = r.members || []; S.adminCommittees = r.committees || []; }
+
+  /** Switches the dashboard to a tab with the given filters (used by the stat tiles). */
+  function showAdmin(tab, filters) {
+    adminTab = tab;
+    if (tab === 'members') adminFilter = Object.assign({ q: '', status: '' }, filters);
+    if (tab === 'committees') comFilter = Object.assign({ q: '', status: '', media: '' }, filters);
+    renderAdmin(false, true);
+  }
+
+  async function renderAdmin(force, scrollToList) {
     app.innerHTML = `
       <div class="row" style="margin-bottom:12px"><h1>Admin dashboard</h1><div class="spacer"></div><span class="badge b-admin">ADMIN</span></div>
       <div class="stats" id="stats"></div>
       <div id="pendingBox"></div>
-      <div class="tabs"><button class="tab ${adminTab === 'members' ? 'on' : ''}" data-tab="members">Jury members</button><button class="tab ${adminTab === 'log' ? 'on' : ''}" data-tab="log">Activity log</button>
+      <div class="tabs" id="adminTabs">${[['members', 'Jury members'], ['committees', 'Committees'], ['log', 'Activity log']].map(([k, l]) =>
+        `<button class="tab ${adminTab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}
         <div class="spacer"></div><button class="btn btn-ghost btn-sm" id="refresh">↻ Refresh</button></div>
       <div id="adminBody" class="card"><div class="muted">Loading…</div></div>`;
     $$('.tab').forEach(t => t.onclick = () => { adminTab = t.dataset.tab; renderAdmin(); });
     $('#refresh').onclick = () => { S.adminMembers = null; renderAdmin(true); };
     try {
-      if (!S.adminMembers || force) S.adminMembers = (await api('adminList')).members;
+      if (!S.adminMembers || force) setAdminData(await api('adminList'));
       const pend = S.adminMembers.filter(x => x.pending);
       const m = S.adminMembers.filter(x => x.role !== 'admin' && !x.pending && !x.rejected);
-      const com = m.reduce((a, x) => a + (x.committees || 0), 0), sub = m.reduce((a, x) => a + (x.submitted || 0), 0);
-      $('#stats').innerHTML = [
-        [m.length, 'Jury members'], [com, 'Committees'], [sub, 'Submitted'], [com - sub, 'Drafts'], [m.filter(x => !x.committees).length, 'Members not started'],
-        [m.reduce((a, x) => a + x.photos, 0), 'Photos'], [m.reduce((a, x) => a + (x.videos || 0), 0), 'Videos'], [m.reduce((a, x) => a + x.documents, 0), 'Documents']
-      ].map(([n, l]) => `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+      const coms = S.adminCommittees || [];
+      const sum = k => coms.reduce((a, c) => a + (c[k] || 0), 0);
+      const sub = coms.filter(c => c.status === 'Submitted').length;
+      // each tile: [count, label, tab, filters] — clicking opens that list with those filters
+      const tiles = [
+        [m.length, 'Jury members', 'members', { status: '' }],
+        [coms.length, 'Committees', 'committees', {}],
+        [sub, 'Submitted', 'committees', { status: 'Submitted' }],
+        [coms.length - sub, 'Drafts', 'committees', { status: 'Draft' }],
+        [m.filter(x => !x.committees).length, 'Members not started', 'members', { status: 'Not started' }],
+        [sum('photos'), 'Photos', 'committees', { media: 'photo' }],
+        [sum('videos'), 'Videos', 'committees', { media: 'video' }],
+        [sum('documents'), 'Documents', 'committees', { media: 'document' }]
+      ];
+      if (pend.length) tiles.push([pend.length, 'Pending approvals', 'pending', {}]);
+      const isOn = (tab, f) => tab === adminTab && (
+        tab === 'members' ? (f.status || '') === adminFilter.status && !adminFilter.q :
+        tab === 'committees' ? (f.status || '') === comFilter.status && (f.media || '') === comFilter.media && !comFilter.q : false);
+      $('#stats').innerHTML = tiles.map(([n, l, tab, f], i) =>
+        `<button type="button" class="stat stat-btn ${isOn(tab, f) ? 'on' : ''}${tab === 'pending' ? ' warn' : ''}" data-i="${i}" title="Show ${esc(l.toLowerCase())}"><div class="n">${n}</div><div class="l">${l}</div></button>`).join('');
+      $$('#stats .stat-btn').forEach(b => b.onclick = () => {
+        const [, , tab, f] = tiles[+b.dataset.i];
+        if (tab === 'pending') return $('#pendingBox').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        showAdmin(tab, f);
+      });
       renderPending(pend);
-      if (adminTab === 'members') renderMembersTable(m); else await renderLog();
+      if (adminTab === 'members') renderMembersTable(m);
+      else if (adminTab === 'committees') renderCommitteesTable(coms);
+      else await renderLog();
+      if (scrollToList) $('#adminTabs').scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (err) { $('#adminBody').innerHTML = `<div class="notice warn">${esc(err.message)}</div>`; }
+  }
+
+  function downloadCsv(rows, cols, filename) {
+    const csv = [cols.join(',')].concat(rows.map(x => cols.map(c => `"${String(x[c] == null ? '' : x[c]).replace(/"/g, '""')}"`).join(','))).join('\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' }));
+    a.download = filename; a.click();
   }
 
   function renderPending(list) {
@@ -786,7 +827,7 @@
       if (!approve && !confirmBox('Reject this registration?')) return;
       if (role === 'admin' && !confirmBox('Approve as ADMIN? Admins can see every member\'s data and approve others.')) return;
       busy(true, approve ? 'Approving…' : 'Rejecting…');
-      try { S.adminMembers = (await api('adminApprove', { email, approve, role: role || 'jury' })).members; toast(approve ? 'Approved as ' + (role || 'jury') + ' ✓' : 'Rejected'); renderAdmin(); }
+      try { setAdminData(await api('adminApprove', { email, approve, role: role || 'jury' })); toast(approve ? 'Approved as ' + (role || 'jury') + ' ✓' : 'Rejected'); renderAdmin(); }
       catch (err) { toast(err.message, true); }
       finally { busy(false); }
     };
@@ -817,13 +858,45 @@
       $$('#mt tr.click').forEach(tr => tr.onclick = () => renderAdminDetail(tr.dataset.email));
     };
     $('#aq').oninput = e => { adminFilter.q = e.target.value; draw(); };
-    $('#as').onchange = e => { adminFilter.status = e.target.value; draw(); };
-    $('#csv').onclick = () => {
-      const cols = ['memberName', 'email', 'phone', 'location', 'status', 'committees', 'submitted', 'photos', 'videos', 'documents', 'updatedAt', 'lastLogin'];
-      const csv = [cols.join(',')].concat(all.map(x => cols.map(c => `"${String(x[c] == null ? '' : x[c]).replace(/"/g, '""')}"`).join(','))).join('\n');
-      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' }));
-      a.download = 'paribesh-jury-members.csv'; a.click();
+    $('#as').onchange = e => { adminFilter.status = e.target.value; renderAdmin(); };
+    $('#csv').onclick = () => downloadCsv(all,
+      ['memberName', 'email', 'phone', 'location', 'status', 'committees', 'submitted', 'photos', 'videos', 'documents', 'updatedAt', 'lastLogin'], 'paribesh-jury-members.csv');
+    draw();
+  }
+
+  /** Every committee form across all jury members, with status / files filters. */
+  function renderCommitteesTable(all) {
+    const body = $('#adminBody');
+    const media = [['', 'Any files'], ['photo', 'With photos'], ['video', 'With videos'], ['document', 'With documents'], ['none', 'No photos yet']];
+    body.innerHTML = `
+      <div class="row" style="margin-bottom:12px">
+        <input id="cq" placeholder="Search committee, area, jury member…" value="${esc(comFilter.q)}" style="flex:1;min-width:180px">
+        <select id="cs" style="width:auto"><option value="">All statuses</option>${['Submitted', 'Draft'].map(s => `<option ${comFilter.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select>
+        <select id="cm" style="width:auto">${media.map(([v, l]) => `<option value="${v}" ${comFilter.media === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <button class="btn btn-ghost btn-sm" id="ccsv">Export CSV</button>
+      </div>
+      <div class="muted small" id="ccount" style="margin-bottom:8px"></div>
+      <div class="table-wrap"><table class="responsive"><thead><tr><th>Committee</th><th>Area</th><th>Jury member</th><th>Status</th><th>Marks</th><th>Files</th><th>Updated</th></tr></thead><tbody id="ct"></tbody></table></div>`;
+    let rows = [];
+    const draw = () => {
+      const q = comFilter.q.toLowerCase();
+      rows = all.filter(c => (!comFilter.status || c.status === comFilter.status) &&
+        (!comFilter.media || (comFilter.media === 'none' ? !c.photos : (c[comFilter.media === 'photo' ? 'photos' : comFilter.media === 'video' ? 'videos' : 'documents'] || 0) > 0)) &&
+        (!q || [c.committeeName, c.area, c.memberName, c.email].join(' ').toLowerCase().includes(q)));
+      $('#ccount').textContent = `${rows.length} of ${all.length} committees`;
+      $('#ct').innerHTML = rows.length ? rows.map(c => `<tr class="click" data-email="${esc(c.email)}" data-id="${esc(c.id)}">
+          <td data-l="Committee"><b>${esc(c.committeeName || '—')}</b></td><td data-l="Area">${esc(c.area || '—')}</td>
+          <td data-l="Jury member">${esc(c.memberName || '—')}<br><span class="muted small">${esc(c.email)}</span></td>
+          <td data-l="Status">${statusBadge(c.status)}</td><td data-l="Marks">${marksText(c.marks)}</td>
+          <td data-l="Files">${c.photos} 📷 · ${c.videos || 0} 🎥 · ${c.documents} 📎</td><td data-l="Updated">${fmtDate(c.updatedAt)}</td></tr>`).join('')
+        : '<tr><td colspan="7" class="muted">No matching committees.</td></tr>';
+      $$('#ct tr.click').forEach(tr => tr.onclick = () => renderAdminSubmission(tr.dataset.email, tr.dataset.id));
     };
+    $('#cq').oninput = e => { comFilter.q = e.target.value; draw(); };
+    $('#cs').onchange = e => { comFilter.status = e.target.value; renderAdmin(); };
+    $('#cm').onchange = e => { comFilter.media = e.target.value; renderAdmin(); };
+    $('#ccsv').onclick = () => downloadCsv(rows,
+      ['committeeName', 'area', 'memberName', 'email', 'status', 'marks', 'photos', 'videos', 'documents', 'createdAt', 'updatedAt', 'folderUrl'], 'paribesh-committees.csv');
     draw();
   }
 
@@ -864,7 +937,7 @@
       const role = meta.role === 'admin' ? 'jury' : 'admin';
       if (!confirmBox(role === 'admin' ? `Make ${email} an ADMIN? They will see all members' data.` : `Change ${email} to jury (remove admin access)?`)) return;
       busy(true, 'Updating role…');
-      try { S.adminMembers = (await api('adminSetRole', { email, role })).members; toast('Role set to ' + role + ' ✓'); renderAdminDetail(email); }
+      try { setAdminData(await api('adminSetRole', { email, role })); toast('Role set to ' + role + ' ✓'); renderAdminDetail(email); }
       catch (err) { toast(err.message, true); }
       finally { busy(false); }
     };
@@ -931,9 +1004,9 @@
     log(d, u, a, det) { d.log.push({ time: new Date().toISOString(), email: u.email, name: u.name, action: a, details: det || '' }); },
     subFiles(d, id) { return d.files.filter(f => f.sub === id && !f.deleted).map(({ id, name, mimeType, kind, sizeKB, uploadedAt }) => ({ id, name, mimeType, kind, sizeKB, uploadedAt })); },
     summaries(d, email, withFolder) {
-      return Object.values(d.subs).filter(s => s.email === email).map(s => {
+      return Object.values(d.subs).filter(s => email == null || s.email === email).map(s => {
         const fs = this.subFiles(d, s.id);
-        return { id: s.id, committeeName: s.committeeName, area: s.location, status: s.status, createdAt: s.createdAt, updatedAt: s.updatedAt,
+        return { id: s.id, email: s.email, memberName: (d.users[s.email] || {}).name || s.memberName, committeeName: s.committeeName, area: s.location, status: s.status, createdAt: s.createdAt, updatedAt: s.updatedAt,
           marks: scoreTotal(s.data), photos: fs.filter(f => f.kind === 'photo').length, videos: fs.filter(f => f.kind === 'video').length, documents: fs.filter(f => f.kind !== 'photo' && f.kind !== 'video').length,
           folderUrl: withFolder ? 'https://drive.google.com/' : undefined };
       }).sort((a, b) => a.updatedAt < b.updatedAt ? 1 : -1);
@@ -989,7 +1062,8 @@
         case 'getSubmission': {
           const s = d.subs[b.id];
           if (!s || (s.email !== u.email && u.role !== 'admin')) return { ok: false, error: 'Committee form not found' };
-          return { ok: true, submission: Object.assign({}, s, { folderUrl: u.role === 'admin' ? 'https://drive.google.com/' : undefined }), files: this.subFiles(d, s.id) };
+          const files = this.subFiles(d, s.id).map(f => u.role === 'admin' ? Object.assign({ url: 'https://drive.google.com/' }, f) : f);
+          return { ok: true, submission: Object.assign({}, s, { folderUrl: u.role === 'admin' ? 'https://drive.google.com/' : undefined }), files };
         }
         case 'saveSubmission': {
           if (!b.data.committeeName || !b.data.area) return { ok: false, error: 'Committee name and area are needed to save' };
@@ -1023,7 +1097,7 @@
           const subs = this.summaries(d, x.email), submitted = subs.filter(s => s.status === 'Submitted').length;
           return { pending: !!x.pending, rejected: !!x.rejected, assignedArea: x.assignedArea, reference: x.reference, altEmail: x.altEmail, source: x.source, email: x.email, name: x.name, phone: x.phone, role: x.role, lastLogin: x.lastLogin || '',
             committees: subs.length, submitted, status: !subs.length ? 'Not started' : (submitted ? 'Submitted' : 'Draft'), location: subs.map(s => s.area).filter(Boolean).join(', '), memberName: x.name,
-            updatedAt: subs.length ? subs[0].updatedAt : '', photos: subs.reduce((a, s) => a + s.photos, 0), videos: subs.reduce((a, s) => a + s.videos, 0), documents: subs.reduce((a, s) => a + s.documents, 0) }; }) };
+            updatedAt: subs.length ? subs[0].updatedAt : '', photos: subs.reduce((a, s) => a + s.photos, 0), videos: subs.reduce((a, s) => a + s.videos, 0), documents: subs.reduce((a, s) => a + s.documents, 0) }; }), committees: this.summaries(d, null, true) };
         case 'adminGet': { const x = d.users[b.email]; return { ok: true, user: x ? this.pub(x) : { email: b.email }, submissions: this.summaries(d, b.email, true) }; }
         case 'adminLog': return { ok: true, log: d.log.slice(-300).reverse() };
       }

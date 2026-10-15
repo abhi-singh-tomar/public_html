@@ -128,6 +128,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--green); box-shad
 .stat { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
 .stat .n { font-size: 1.6rem; font-weight: 700; color: var(--green-d); }
 .stat .l { font-size: .8rem; color: var(--muted); }
+.stat-btn { font: inherit; text-align: left; width: 100%; cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+.stat-btn:hover { border-color: var(--green); }
+.stat-btn.on { border-color: var(--green); box-shadow: inset 0 0 0 1px var(--green); background: var(--green-l); }
+.stat-btn.warn { border-left: 4px solid var(--gold); }
 .tabs { display: flex; gap: 6px; margin-bottom: 14px; overflow-x: auto; }
 .tab { padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: #fff; font: inherit; font-size: .9rem; cursor: pointer; white-space: nowrap; }
 .tab.on { background: var(--green); color: #fff; border-color: var(--green); }
