@@ -78,7 +78,7 @@
   function logout(expired) {
     if (!S.token) return;   // already logged out (several requests can report an expired session at once)
     S.token = null; S.user = null; S.submissions = []; S.submission = null; S.files = []; S.imgCache = {}; S.adminMembers = null; S.adminEdit = null; S.storage = null; S.totals = null; S.otherCommittees = null;
-    store.del('pbj_session');
+    store.del('pbj_session'); store.del('pbj_as_jury');
     Thumbs.clear();
     $('#topbar').hidden = true;
     renderLogin();
@@ -91,6 +91,8 @@
     $('#demoBanner').hidden = !DEMO;
     setupMenu();
     setupInstall();
+    // iPhones ignore user-scalable=no: block pinch-zoom there too, so the top bar never changes size
+    ['gesturestart', 'gesturechange'].forEach(t => document.addEventListener(t, e => e.preventDefault(), { passive: false }));
     resume();
   }
 
@@ -117,7 +119,7 @@
     try { await loadMe(); } catch (e) { if (S.token && e.offline) toast('Could not reach the server — showing your saved data', true); return; }
     if (JSON.stringify([S.user, S.submissions, S.storage]) === before) return;
     $('#who').textContent = S.user.name || S.user.email;
-    if (S.user.role !== 'admin' && $('#newSub')) renderMember();   // only when the list is still on screen
+    if ($('#newSub')) renderMember();   // only when the list is still on screen
   }
 
   function renderRetry(msg) {
@@ -136,11 +138,28 @@
     saveSession();
   }
 
+  /* Admins who are also jury members can switch to their own committee forms ("jury mode"). */
+  const asJury = () => S.user.role === 'admin' && !!store.get('pbj_as_jury');
+
   function route() {
     $('#topbar').hidden = false;
     $('#who').textContent = S.user.name || S.user.email;
-    if (S.user.role === 'admin') return renderAdmin();
+    const sw = $('#switchBtn');
+    sw.hidden = S.user.role !== 'admin';
+    sw.textContent = asJury() ? 'Admin dashboard' : 'My committee forms';
+    if (S.user.role === 'admin' && !asJury()) return renderAdmin();
     renderMember();
+  }
+
+  async function switchMode(jury) {
+    store.set('pbj_as_jury', jury);
+    S.adminEdit = null; S.submission = null; S.files = [];
+    if (jury) {   // the admin's own forms may have changed since they were last loaded
+      busy(true, 'Loading…');
+      try { await loadMe(); } catch (err) { toast(err.message, true); }
+      finally { busy(false); }
+    }
+    route();
   }
 
   function setupMenu() {
@@ -151,6 +170,7 @@
       const a = e.target.dataset.act;
       if (a === 'logout') logout();
       if (a === 'profile') { S.adminEdit = null; renderProfile(); }
+      if (a === 'switch') switchMode(!asJury());
     };
   }
 
@@ -291,8 +311,9 @@
 
   /** "My committees": every committee form this jury member has started. */
   function renderMember() {
-    const list = S.submissions || [];
+    const list = S.submissions || [], adminJury = S.user.role === 'admin';
     app.innerHTML = `
+      ${adminJury ? '<button class="btn btn-ghost btn-sm" id="toAdmin" style="margin-bottom:12px">← Admin dashboard</button>' : ''}
       <div class="row" style="margin-bottom:12px">
         <div><h1>Your committee reports</h1><div class="muted small">One form per committee — each committee gets its own folder for photos &amp; documents.</div></div>
         <div class="spacer"></div><button class="btn btn-primary" id="newSub">+ New committee</button>
@@ -302,14 +323,16 @@
         ${list.map(s => `<tr class="click" data-id="${esc(s.id)}"><td data-l="Committee"><b>${esc(s.committeeName || '—')}</b></td><td data-l="Area">${esc(s.area || '—')}</td>
           <td data-l="Status">${statusBadge(s.status)}</td><td data-l="Marks">${marksText(s.marks)}</td><td data-l="Files">${s.photos} 📷 · ${s.videos || 0} 🎥 · ${s.documents} 📎</td><td data-l="Updated">${fmtDate(s.updatedAt)}</td></tr>`).join('')}
         </tbody></table></div>` : '<div class="muted">No committee forms yet. Tap <b>+ New committee</b> to start.</div>'}</div>
+      ${adminJury ? '<p class="muted small">To add photos or change another jury member\'s committee, open it from the Admin dashboard.</p>' : `
       <div class="card" id="otherCard">
         <h2 style="margin-top:0">Add evidence to another committee</h2>
         <p class="muted small" style="margin:-4px 0 10px">Visited a committee that someone else in your group already filled in? Add your photos and videos to it here — they go into the same committee folder.</p>
         <input id="ocq" type="search" placeholder="Search all committees by name, area or jury member…" autocomplete="off">
         <div id="ocList"><div class="muted small" style="margin-top:8px">Loading…</div></div>
-      </div>`;
+      </div>`}`;
     $('#newSub').onclick = () => openSubmission(null);
     $$('tr.click', app).forEach(tr => tr.onclick = () => openSubmission(tr.dataset.id));
+    if (adminJury) { $('#toAdmin').onclick = () => switchMode(false); return; }
     $('#ocq').oninput = drawOtherCommittees;
     if (S.otherCommittees) drawOtherCommittees();
     loadOtherCommittees();
@@ -370,6 +393,28 @@
   const splitLabel = l => { const m = /^([A-Z])\.\s*(.*)$/.exec(l); return m ? [m[1], m[2]] : ['', l]; };
   const totalText = n => n == null ? '—' : String(n);
 
+  /** Marks dropdown: blank, 0, 5, 10 … max, then "Other…" to type any number. A saved mark that isn't a multiple of 5 stays selectable. */
+  const MARK_STEP = 5, MARK_OTHER = '__other';
+  function markOptions(max, val) {
+    const opts = [], has = val !== '' && !isNaN(val);
+    for (let n = 0; n <= max; n += MARK_STEP) opts.push(String(n));
+    if (has && !opts.includes(String(Number(val)))) opts.push(String(val));
+    opts.sort((a, b) => a - b);
+    return `<option value="">—</option>` + opts.map(o => `<option value="${esc(o)}" ${has && Number(o) === Number(val) ? 'selected' : ''}>${esc(o)}</option>`).join('') +
+      `<option value="${MARK_OTHER}">Other…</option>`;
+  }
+  /** "Other…" chosen: swap the dropdown for a number box (same id, so saving and validation are unchanged). */
+  function otherMark(sel) {
+    if (!sel.isConnected) return;   // 'input' and 'change' can both arrive for the same pick
+    const f = SCORE_FIELDS.find(x => 'f_' + x.key === sel.id);
+    const inp = document.createElement('input');
+    Object.assign(inp, { id: sel.id, name: sel.name, type: 'number', min: 0, step: 'any', placeholder: '0 – ' + f.max });
+    inp.max = f.max; inp.inputMode = 'decimal';
+    inp.setAttribute('aria-label', sel.getAttribute('aria-label'));
+    sel.replaceWith(inp);
+    inp.focus();
+  }
+
   /** Marks as a table: Section | Area | Max | Marks, with a running total row. readOnly = admin view. */
   function scoreTableHTML(s, v, readOnly) {
     return `<div class="table-wrap"><table class="score-table">
@@ -379,7 +424,7 @@
         return `<tr><td class="sec">${esc(k)}</td><td>${readOnly ? esc(area) : `<label for="f_${esc(f.key)}">${esc(area)}</label>`}</td>
           <td class="num muted">${f.max}</td>
           <td class="num">${readOnly ? `<b>${val === '' ? '—' : esc(val)}</b>`
-            : `<input id="f_${esc(f.key)}" name="${esc(f.key)}" type="number" inputmode="decimal" min="0" max="${f.max}" step="any" value="${esc(val)}" placeholder="—" aria-label="${esc(f.label)}, marks out of ${f.max}">`}</td></tr>`;
+            : `<select id="f_${esc(f.key)}" name="${esc(f.key)}" aria-label="${esc(f.label)}, marks out of ${f.max}">${markOptions(f.max, val)}</select>`}</td></tr>`;
       }).join('')}</tbody>
       <tfoot><tr><td></td><td><b>Total</b></td><td class="num"><b>${SCORE_MAX}</b></td><td class="num"><b id="${readOnly ? 'scoreTotalRO' : 'scoreTotal'}">${totalText(scoreTotal(v))}</b></td></tr></tfoot>
     </table></div>`;
@@ -482,11 +527,13 @@
     };
     if ($('#another')) $('#another').onclick = () => openSubmission(null);
     const form = $('#subForm');
-    form.addEventListener('input', () => {
+    form.addEventListener('input', e => {
+      if (e.target.value === MARK_OTHER) return otherMark(e.target);
       const d = readForm();
       store.set(draftKey(), d);
       if ($('#scoreTotal')) $('#scoreTotal').textContent = totalText(scoreTotal(d));
     });
+    form.addEventListener('change', e => { if (e.target.value === MARK_OTHER) otherMark(e.target); });
     if ($('#saveDraft')) $('#saveDraft').onclick = () => saveSubmission('Draft');
     form.onsubmit = e => { e.preventDefault(); saveSubmission(adm ? sub.status : 'Submitted'); };
     $('#pdfBtn').onclick = () => makePdf(adm ? adm.member : S.user, S.submission, S.files);
@@ -1261,6 +1308,7 @@
       const i = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
       if (i === cur || !items[i]) return;
       cur = i;
+      zoom(null);
       const f = items[i];
       $('.g-count', g).textContent = `${i + 1} / ${items.length}`;
       $('.g-cap', g).innerHTML = [f.caption ? esc(f.caption) : '', evidenceLine(f)].filter(Boolean).join('<br>');
@@ -1277,22 +1325,67 @@
       clearTimeout(tm); tm = setTimeout(update, 120);
     }, { passive: true });
 
-    // touch: swipe left/right is native scrolling; swipe down closes; a tap hides/shows the controls
-    let sx = 0, sy = null;
-    track.addEventListener('touchstart', e => { if (e.touches.length === 1) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; } else sy = null; }, { passive: true });
+    // double-tap (or double-click) a photo to zoom in at that spot; drag to look around; double-tap again to zoom out.
+    // (Page pinch-zoom is switched off so the top bar keeps its size — this replaces it for photos.)
+    const ZOOM = 2.5;
+    let zImg = null, zx = 0, zy = 0;
+    function zoom(img, px, py) {
+      if (zImg) { zImg.style.transform = ''; zImg = null; track.style.overflowX = ''; g.classList.remove('zoomed'); }
+      if (!img) return;
+      const r = img.getBoundingClientRect();
+      zx = 0; zy = 0; zImg = img;
+      img.style.transformOrigin = `${px - r.left}px ${py - r.top}px`;
+      img.style.transform = `scale(${ZOOM})`;
+      track.style.overflowX = 'hidden';   // no swiping to the next photo while zoomed
+      g.classList.add('zoomed');
+    }
+    const photoAt = target => {
+      const s = target.closest('.g-slide'), i = s ? Array.prototype.indexOf.call(slides, s) : -1;
+      return i > -1 && items[i].kind === 'photo' ? s.querySelector('img') : null;
+    };
+    let barTimer;
+    const toggleZoom = (e, x, y) => { clearTimeout(barTimer); const img = photoAt(e.target); if (zImg || img) zoom(zImg ? null : img, x, y); };
+
+    // touch: swipe left/right is native scrolling; swipe down closes; drag pans a zoomed photo
+    let sx = 0, sy = null, tx = 0, ty = 0, pan = null, lastTap = 0;
+    track.addEventListener('touchstart', e => {
+      if (e.touches.length !== 1) { sy = null; pan = null; lastTap = 0; return; }
+      tx = sx = e.touches[0].clientX; ty = sy = e.touches[0].clientY;
+      pan = zImg ? { x: sx, y: sy, zx, zy } : null;
+      if (zImg) sy = null;
+    }, { passive: true });
     track.addEventListener('touchmove', e => {
+      if (pan) {
+        zx = pan.zx + e.touches[0].clientX - pan.x; zy = pan.zy + e.touches[0].clientY - pan.y;
+        zImg.style.transition = 'none';
+        zImg.style.transform = `translate(${zx}px, ${zy}px) scale(${ZOOM})`;
+        return;
+      }
       if (sy == null) return;
       const dy = e.touches[0].clientY - sy, dx = Math.abs(e.touches[0].clientX - sx);
       if (dy > 10 && dy > dx * 1.5) { track.style.transform = `translateY(${dy}px)`; g.style.opacity = Math.max(.4, 1 - dy / 500); }
     }, { passive: true });
     track.addEventListener('touchend', e => {
+      const t = e.changedTouches[0], moved = Math.abs(t.clientX - tx) + Math.abs(t.clientY - ty);
+      if (zImg) zImg.style.transition = '';
+      if (moved < 12) {   // a tap: two within 300 ms = double-tap
+        if (Date.now() - lastTap < 300) { lastTap = 0; toggleZoom(e, t.clientX, t.clientY); e.preventDefault(); }
+        else lastTap = Date.now();
+      }
+      pan = null;
       if (sy == null) return;
-      const dy = e.changedTouches[0].clientY - sy, dx = Math.abs(e.changedTouches[0].clientX - sx);
+      const dy = t.clientY - sy, dx = Math.abs(t.clientX - sx);
       sy = null;
       if (dy > 90 && dy > dx * 1.5) return close();
       track.style.transform = ''; g.style.opacity = '';
-    }, { passive: true });
-    track.addEventListener('click', e => { if (!e.target.closest('a')) g.classList.toggle('bare'); });
+    });
+    track.addEventListener('dblclick', e => toggleZoom(e, e.clientX, e.clientY));
+    // a single tap hides/shows the controls (after a pause, so a double-tap doesn't flicker them)
+    track.addEventListener('click', e => {
+      if (e.target.closest('a')) return;
+      clearTimeout(barTimer);
+      barTimer = setTimeout(() => { if (!zImg) g.classList.toggle('bare'); }, 300);
+    });
 
     reel.addEventListener('click', e => { const b = e.target.closest('.g-th'); if (b) go(Number(b.dataset.i), true); });
     $('.g-prev', g).onclick = () => go(cur - 1, true);
@@ -1471,7 +1564,8 @@
 
   async function renderAdmin(force, scrollToList) {
     app.innerHTML = `
-      <div class="row" style="margin-bottom:12px"><h1>Admin dashboard</h1><div class="spacer"></div><span class="badge b-admin">ADMIN</span></div>
+      <div class="row" style="margin-bottom:12px"><h1>Admin dashboard</h1><div class="spacer"></div>
+        <button class="btn btn-primary btn-sm" id="toJury">📝 My committee forms</button><span class="badge b-admin">ADMIN</span></div>
       <div class="stats" id="stats"></div>
       <div id="driveBox"></div>
       <div id="pendingBox"></div>
@@ -1481,6 +1575,7 @@
       <div id="adminBody" class="card"><div class="muted">Loading…</div></div>`;
     $$('.tab').forEach(t => t.onclick = () => { adminTab = t.dataset.tab; renderAdmin(); });
     $('#refresh').onclick = () => { S.adminMembers = null; renderAdmin(true); };
+    $('#toJury').onclick = () => switchMode(true);
     try {
       if (!S.adminMembers || force) setAdminData(await api('adminList'));
       const pend = S.adminMembers.filter(x => x.pending);
