@@ -53,6 +53,26 @@ window.APP_CONFIG = {
           hint: 'What the committee did, scale of participation, notable observations' },
         { key: 'remarks', label: 'Jury remarks', type: 'textarea', rows: 3 }
       ]
+    },
+    {
+      // Optional marks. Keys must stay 'score_<letter>'; keep the max values in step with SCORE_MAX in Code.gs.
+      title: 'Marks (optional)',
+      scoring: true,
+      hint: 'Fill in only the sections you have assessed — you can leave any of these blank.',
+      fields: [
+        { key: 'score_A', label: 'A. Eco-Friendly Idol & Puja Materials', type: 'number', max: 100 },
+        { key: 'score_B', label: 'B. Eco-Friendly Pandal & Decoration', type: 'number', max: 120 },
+        { key: 'score_C', label: 'C. Waste Management & Circularity', type: 'number', max: 160 },
+        { key: 'score_D', label: 'D. Water Conservation & Sanitation', type: 'number', max: 90 },
+        { key: 'score_E', label: 'E. Energy Conservation & Low-Carbon Practices', type: 'number', max: 90 },
+        { key: 'score_F', label: 'F. Plastic-Free & Sustainable Vendor', type: 'number', max: 80 },
+        { key: 'score_G', label: 'G. Management Greenery, Trees & Biodiversity', type: 'number', max: 60 },
+        { key: 'score_H', label: 'H. Environmental Awareness & Community', type: 'number', max: 50 },
+        { key: 'score_I', label: 'I. Action Crowd Management & Traffic Flow', type: 'number', max: 80 },
+        { key: 'score_J', label: 'J. Fire, Emergency & Escape Safety', type: 'number', max: 100 },
+        { key: 'score_K', label: 'K. Accessibility & Inclusiveness', type: 'number', max: 40 },
+        { key: 'score_L', label: 'L. Noise & Air Pollution Control', type: 'number', max: 30 }
+      ]
     }
   ]
 };

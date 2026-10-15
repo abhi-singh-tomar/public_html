@@ -9,6 +9,14 @@
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
   const app = $('#app');
   const ALL_FIELDS = CFG.SECTIONS.flatMap(s => s.fields);
+  const SCORE_FIELDS = CFG.SECTIONS.filter(s => s.scoring).flatMap(s => s.fields);
+  const SCORE_MAX = SCORE_FIELDS.reduce((a, f) => a + (f.max || 0), 0);
+  /** Sum of the marks entered in a form's data, or null when no marks were given. */
+  const scoreTotal = data => {
+    const vals = SCORE_FIELDS.map(f => (data || {})[f.key]).filter(x => x !== '' && x != null && !isNaN(x));
+    return vals.length ? Math.round(vals.reduce((a, x) => a + Number(x), 0) * 100) / 100 : null;
+  };
+  const marksText = n => n == null ? '—' : `${n} / ${SCORE_MAX}`;
 
   const S = { token: null, user: null, submissions: [], submission: null, files: [], imgCache: {}, adminMembers: null };
 
@@ -245,9 +253,9 @@
         <div><h1>Your committee reports</h1><div class="muted small">One form per committee — each committee gets its own folder for photos &amp; documents.</div></div>
         <div class="spacer"></div><button class="btn btn-primary" id="newSub">+ New committee</button>
       </div>
-      <div class="card">${list.length ? `<div class="table-wrap"><table class="responsive"><thead><tr><th>Committee</th><th>Area</th><th>Status</th><th>Files</th><th>Updated</th></tr></thead><tbody>
+      <div class="card">${list.length ? `<div class="table-wrap"><table class="responsive"><thead><tr><th>Committee</th><th>Area</th><th>Status</th><th>Marks</th><th>Files</th><th>Updated</th></tr></thead><tbody>
         ${list.map(s => `<tr class="click" data-id="${esc(s.id)}"><td data-l="Committee"><b>${esc(s.committeeName || '—')}</b></td><td data-l="Area">${esc(s.area || '—')}</td>
-          <td data-l="Status">${statusBadge(s.status)}</td><td data-l="Files">${s.photos} 📷 · ${s.videos || 0} 🎥 · ${s.documents} 📎</td><td data-l="Updated">${fmtDate(s.updatedAt)}</td></tr>`).join('')}
+          <td data-l="Status">${statusBadge(s.status)}</td><td data-l="Marks">${marksText(s.marks)}</td><td data-l="Files">${s.photos} 📷 · ${s.videos || 0} 🎥 · ${s.documents} 📎</td><td data-l="Updated">${fmtDate(s.updatedAt)}</td></tr>`).join('')}
         </tbody></table></div>` : '<div class="muted">No committee forms yet. Tap <b>+ New committee</b> to start.</div>'}</div>`;
     $('#newSub').onclick = () => openSubmission(null);
     $$('tr.click', app).forEach(tr => tr.onclick = () => openSubmission(tr.dataset.id));
@@ -292,8 +300,17 @@
     let input;
     if (f.type === 'textarea') input = `<textarea ${common} rows="${f.rows || 3}">${esc(val)}</textarea>`;
     else if (f.type === 'select') input = `<select ${common}><option value="">Select…</option>${(f.options || []).map(o => `<option ${o === val ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+    else if (f.type === 'number') input = `<input ${common} type="number" inputmode="decimal" min="0"${f.max != null ? ` max="${f.max}"` : ''} step="any" value="${esc(val)}" placeholder="${f.max != null ? '0 – ' + f.max : ''}">`;
     else input = `<input ${common} type="${f.type || 'text'}" value="${esc(val)}" ${f.type === 'tel' ? 'inputmode="tel" autocomplete="tel"' : ''}>`;
-    return `<div class="field"><label for="${id}">${esc(f.label)}${req}</label>${input}${f.hint ? `<div class="hint">${esc(f.hint)}</div>` : ''}</div>`;
+    const max = f.max != null ? ` <span class="muted small">(max ${f.max})</span>` : '';
+    return `<div class="field"><label for="${id}">${esc(f.label)}${max}${req}</label>${input}${f.hint ? `<div class="hint">${esc(f.hint)}</div>` : ''}</div>`;
+  }
+
+  function sectionHTML(s, v) {
+    return `<div class="section-title"><span class="dot"></span><h2 style="margin:0">${esc(s.title)}</h2></div>
+      ${s.hint ? `<p class="muted small" style="margin:-4px 0 10px">${esc(s.hint)}</p>` : ''}
+      ${s.fields.map(f => fieldHTML(f, v[f.key])).join('')}
+      ${s.scoring ? `<div class="notice" style="margin-top:4px"><b>Total marks: <span id="scoreTotal">${marksText(scoreTotal(v))}</span></b></div>` : ''}`;
   }
 
   /** One committee form (new when S.submission is null). With S.adminEdit set, an admin is editing a jury member's form. */
@@ -311,7 +328,7 @@
         : status === 'Submitted' ? '<div class="notice">Submitted. You can still update details or add files — changes are logged. <button type="button" class="btn btn-primary btn-sm" id="another" style="margin-left:6px">+ Start another committee</button></div>' : ''}
       <div class="grid grid-main">
         <form class="card" id="subForm" novalidate>
-          ${CFG.SECTIONS.map(s => `<div class="section-title"><span class="dot"></span><h2 style="margin:0">${esc(s.title)}</h2></div>${s.fields.map(f => fieldHTML(f, v[f.key])).join('')}`).join('')}
+          ${CFG.SECTIONS.map(s => sectionHTML(s, v)).join('')}
           <div class="actions-bar sticky-m">
             ${adm ? '<button type="submit" class="btn btn-primary">Save changes</button>' : `
             <button type="button" class="btn btn-ghost" id="saveDraft">Save draft</button>
@@ -368,7 +385,11 @@
     };
     if ($('#another')) $('#another').onclick = () => openSubmission(null);
     const form = $('#subForm');
-    form.addEventListener('input', () => store.set(draftKey(), readForm()));
+    form.addEventListener('input', () => {
+      const d = readForm();
+      store.set(draftKey(), d);
+      if ($('#scoreTotal')) $('#scoreTotal').textContent = marksText(scoreTotal(d));
+    });
     if ($('#saveDraft')) $('#saveDraft').onclick = () => saveSubmission('Draft');
     form.onsubmit = e => { e.preventDefault(); saveSubmission(adm ? sub.status : 'Submitted'); };
 
@@ -397,24 +418,29 @@
     return d;
   }
 
+  /** Returns '' when the form is OK, otherwise the message to show (and highlights the first bad field). */
   function validate(all) {
-    let firstBad = null;
+    let firstBad = null, msg = '';
     ALL_FIELDS.forEach(f => {
       const el = $('#f_' + f.key); if (!el) return;
+      const val = el.value.trim();
       const need = all ? f.required : (f.key === 'committeeName' || f.key === 'area');
-      const bad = need && !el.value.trim();
+      let bad = need && !val, why = '';
+      if (bad) why = all ? 'Please fill all required fields' : 'Committee name and area are needed to save';
+      // input type=number reports badInput when the browser can't parse what was typed
+      else if (f.type === 'number' && (el.validity && el.validity.badInput || (val && (isNaN(val) || Number(val) < 0 || (f.max != null && Number(val) > f.max))))) {
+        bad = true; why = `${f.label}: marks must be between 0 and ${f.max}`;
+      }
       el.classList.toggle('invalid', bad);
-      if (bad && !firstBad) firstBad = el;
+      if (bad && !firstBad) { firstBad = el; msg = why; }
     });
     if (firstBad) { firstBad.focus(); firstBad.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
-    return !firstBad;
+    return msg;
   }
 
   async function saveSubmission(status, quiet) {
-    if (!validate(status === 'Submitted')) {
-      toast(status === 'Submitted' ? 'Please fill all required fields' : 'Committee name and area are needed to save', true);
-      return false;
-    }
+    const problem = validate(status === 'Submitted');
+    if (problem) { toast(problem, true); return false; }
     busy(true, status === 'Submitted' ? 'Submitting…' : 'Saving…');
     try {
       const key = draftKey();
@@ -642,6 +668,22 @@
       CFG.SECTIONS.forEach(sec => {
         ensure(14);
         doc.setFont('helvetica', 'bold'); doc.setFontSize(11.5); doc.setTextColor(...green); doc.text(sec.title, M, y); y += 6;
+        if (sec.scoring) {
+          // marks table: section name on the left, "marks / max" on the right
+          doc.setFontSize(9.5);
+          const row = (label, val, bold) => {
+            const lines = doc.splitTextToSize(label, W - 2 * M - 34);
+            ensure(lines.length * 5 + 3);
+            doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setTextColor(bold ? 40 : 90); doc.text(lines, M, y);
+            doc.setFont('helvetica', 'bold'); doc.setTextColor(40); doc.text(val, W - M, y, { align: 'right' });
+            y += lines.length * 5 + 1.5;
+          };
+          sec.fields.forEach(f => row(f.label, `${data[f.key] !== '' && data[f.key] != null ? data[f.key] : '—'} / ${f.max}`));
+          doc.setDrawColor(200); doc.setLineWidth(0.3); doc.line(M, y - 3, W - M, y - 3); y += 1.5;
+          row('Total marks', marksText(scoreTotal(data)), true);
+          y += 3;
+          return;
+        }
         sec.fields.forEach(f => {
           const val = String(data[f.key] || (f.prefill ? user[f.prefill] : '') || '—');
           const lines = doc.splitTextToSize(val, W - 2 * M - 52);
@@ -805,9 +847,9 @@
       <div class="row" style="margin-bottom:12px"><div><h1>${esc(r.user.name || email)}</h1><div class="muted small">${esc(email)}${r.user.phone ? ' · ' + esc(r.user.phone) : ''} · Last login ${fmtDate(meta.lastLogin)}</div></div><div class="spacer"></div>${statusBadge(meta.status)}</div>
       <div class="grid grid-main">
         <div class="card"><h2>Committees (${list.length})</h2>
-          ${list.length ? `<div class="table-wrap"><table class="responsive"><thead><tr><th>Committee</th><th>Area</th><th>Status</th><th>Files</th><th>Updated</th></tr></thead><tbody>
+          ${list.length ? `<div class="table-wrap"><table class="responsive"><thead><tr><th>Committee</th><th>Area</th><th>Status</th><th>Marks</th><th>Files</th><th>Updated</th></tr></thead><tbody>
             ${list.map(s => `<tr class="click" data-id="${esc(s.id)}"><td data-l="Committee"><b>${esc(s.committeeName || '—')}</b></td><td data-l="Area">${esc(s.area || '—')}</td>
-              <td data-l="Status">${statusBadge(s.status)}</td><td data-l="Files">${s.photos} 📷 · ${s.videos || 0} 🎥 · ${s.documents} 📎</td><td data-l="Updated">${fmtDate(s.updatedAt)}</td></tr>`).join('')}
+              <td data-l="Status">${statusBadge(s.status)}</td><td data-l="Marks">${marksText(s.marks)}</td><td data-l="Files">${s.photos} 📷 · ${s.videos || 0} 🎥 · ${s.documents} 📎</td><td data-l="Updated">${fmtDate(s.updatedAt)}</td></tr>`).join('')}
             </tbody></table></div>` : '<div class="muted">This member has not started any committee form.</div>'}
         </div>
         <div>
@@ -842,7 +884,8 @@
       <div class="grid grid-main">
         <div class="card">
           ${CFG.SECTIONS.map(s => `<div class="section-title"><span class="dot"></span><h2 style="margin:0">${esc(s.title)}</h2></div>
-            <dl class="kv">${s.fields.map(f => `<dt>${esc(f.label)}</dt><dd>${esc(data[f.key] || '—')}</dd>`).join('')}</dl>`).join('<div style="height:10px"></div>')}
+            <dl class="kv">${s.fields.map(f => `<dt>${esc(f.label)}</dt><dd>${esc(data[f.key] || '—')}${f.max != null && data[f.key] ? ` <span class="muted small">/ ${f.max}</span>` : ''}</dd>`).join('')}
+            ${s.scoring ? `<dt><b>Total marks</b></dt><dd><b>${marksText(scoreTotal(data))}</b></dd>` : ''}</dl>`).join('<div style="height:10px"></div>')}
           <p class="muted small" style="margin-top:14px">Created ${fmtDate(sub.createdAt)} · Updated ${fmtDate(sub.updatedAt)}</p>
         </div>
         <div>
@@ -891,7 +934,7 @@
       return Object.values(d.subs).filter(s => s.email === email).map(s => {
         const fs = this.subFiles(d, s.id);
         return { id: s.id, committeeName: s.committeeName, area: s.location, status: s.status, createdAt: s.createdAt, updatedAt: s.updatedAt,
-          photos: fs.filter(f => f.kind === 'photo').length, videos: fs.filter(f => f.kind === 'video').length, documents: fs.filter(f => f.kind !== 'photo' && f.kind !== 'video').length,
+          marks: scoreTotal(s.data), photos: fs.filter(f => f.kind === 'photo').length, videos: fs.filter(f => f.kind === 'video').length, documents: fs.filter(f => f.kind !== 'photo' && f.kind !== 'video').length,
           folderUrl: withFolder ? 'https://drive.google.com/' : undefined };
       }).sort((a, b) => a.updatedAt < b.updatedAt ? 1 : -1);
     },
