@@ -7,6 +7,9 @@ RewriteEngine On
 RewriteCond %{HTTPS} !=on
 RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
+# Hostinger deploys with git: never serve the repository's internals
+RedirectMatch 404 /\.git
+
 # Correct types
 AddType application/manifest+json .webmanifest
 AddType application/javascript .js

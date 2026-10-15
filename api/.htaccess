@@ -1,0 +1,6 @@
+# Only index.php is reachable; _lib.php, _sync.php and config.sample.php are internal
+Options -Indexes
+DirectoryIndex index.php
+<FilesMatch "^(?!index\.php$)">
+  Require all denied
+</FilesMatch>
