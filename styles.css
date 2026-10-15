@@ -17,7 +17,7 @@
   --safe-b: env(safe-area-inset-bottom, 0px);
 }
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; touch-action: manipulation; }   /* no double-tap page zoom */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; touch-action: manipulation; }   /* pinch-zoom yes, double-tap zoom no */
 body {
   margin: 0; background: var(--bg); color: var(--ink);
   font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Noto Sans Bengali", sans-serif;
@@ -32,7 +32,7 @@ h2 { font-size: 1.1rem; color: var(--green-d); }
 
 /* Top bar */
 .topbar {
-  position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between;
+  position: fixed; top: 0; left: 0; right: 0; z-index: 20;   /* fixed (not sticky) so it can stay put while the page is pinch-zoomed */ display: flex; align-items: center; justify-content: space-between;
   gap: 12px; padding: calc(8px + env(safe-area-inset-top, 0px)) 16px 8px; background: #fff;
   border-bottom: 3px solid var(--green); box-shadow: var(--shadow);
 }

@@ -91,8 +91,7 @@
     $('#demoBanner').hidden = !DEMO;
     setupMenu();
     setupInstall();
-    // iPhones ignore user-scalable=no: block pinch-zoom there too, so the top bar never changes size
-    ['gesturestart', 'gesturechange'].forEach(t => document.addEventListener(t, e => e.preventDefault(), { passive: false }));
+    setupZoomPins();
     resume();
   }
 
@@ -212,6 +211,32 @@
       } catch (err) { toast(err.message, true); }
       finally { busy(false); }
     };
+  }
+
+  /* ---------------- pinch-zoom: the page zooms, the top bar doesn't ----------------
+   * Elements with class vv-pin (top bar, and full-screen layers marked vv-full) are scaled by 1/zoom and moved to
+   * the visible part of the page, so they keep their normal size and stay on screen while the content is zoomed. */
+  let pinZoom = () => {};
+  function setupZoomPins() {
+    const tb = $('#topbar'), sp = $('#topbarSpacer');
+    // the top bar is position:fixed, so this keeps the space it used to take in the page
+    if (window.ResizeObserver) new ResizeObserver(() => { sp.style.height = tb.offsetHeight + 'px'; }).observe(tb);
+    const vv = window.visualViewport;
+    if (!vv) return;
+    pinZoom = () => {
+      const s = vv.scale, zoomed = s > 1.01;
+      $$('.vv-pin').forEach(el => {
+        const st = el.style;
+        if (!zoomed) { st.transform = st.transformOrigin = st.width = st.height = ''; return; }
+        st.transformOrigin = '0 0';
+        st.transform = `translate(${vv.offsetLeft}px, ${vv.offsetTop}px) scale(${1 / s})`;
+        st.width = vv.width * s + 'px';
+        if (el.classList.contains('vv-full')) st.height = vv.height * s + 'px';
+      });
+    };
+    // browsers already send these at most once per frame
+    vv.addEventListener('resize', () => pinZoom());
+    vv.addEventListener('scroll', () => pinZoom());
   }
 
   /* ---------------- install prompt ---------------- */
@@ -1104,7 +1129,7 @@
     if (!f) return;
     const chosen = new Set(String(f.sections || '').split(',').filter(Boolean));
     let loc = f.lat != null ? { lat: f.lat, lng: f.lng } : null, clearLoc = false;
-    const d = document.createElement('div'); d.className = 'modal';
+    const d = document.createElement('div'); d.className = 'modal vv-pin vv-full';
     d.innerHTML = `<div class="card modal-card" role="dialog" aria-modal="true" aria-labelledby="mdT">
       <h2 id="mdT" style="margin-top:0">${f.kind === 'video' ? 'Video' : 'Photo'} details <span class="muted small">(all optional)</span></h2>
       <div class="muted small" style="margin:-4px 0 12px">${esc(f.name)}${f.capturedAt ? `<br>Taken ${fmtDate(f.capturedAt)} <span title="where this time came from">(${esc(srcLabel[f.captureSource] || 'file date')})</span>` : ''}</div>
@@ -1119,6 +1144,7 @@
       <div class="row"><button type="button" class="btn btn-ghost" id="mdCancel">Cancel</button><button type="button" class="btn btn-primary" id="mdSave" style="flex:1">Save details</button></div>
     </div>`;
     document.body.appendChild(d);
+    pinZoom();
     const close = () => { d.remove(); document.removeEventListener('keydown', onKey); };
     const onKey = e => { if (e.key === 'Escape') close(); };
     document.addEventListener('keydown', onKey);
@@ -1278,7 +1304,7 @@
     if (!items.length) return;
     let cur = -1;
     const g = document.createElement('div');
-    g.className = 'gallery';
+    g.className = 'gallery vv-pin vv-full';
     g.setAttribute('role', 'dialog'); g.setAttribute('aria-modal', 'true'); g.setAttribute('aria-label', 'Photos and videos');
     g.innerHTML = `
       <div class="g-top"><span class="g-count" aria-live="polite"></span><button type="button" class="g-btn g-close" aria-label="Close">✕</button></div>
@@ -1292,6 +1318,7 @@
       <div class="g-reel">${items.map((f, i) => `<button type="button" class="g-th${f.kind === 'video' ? ' vid' : ''}" data-i="${i}" aria-label="${f.kind === 'video' ? 'Video' : 'Photo'} ${i + 1}">${thumbImg(f.id)}</button>`).join('')}</div>`;
     document.body.appendChild(g);
     document.body.classList.add('noscroll');
+    pinZoom();
     const track = $('.g-track', g), reel = $('.g-reel', g), slides = track.children, ths = reel.children;
 
     const go = (i, smooth) => {
@@ -1326,7 +1353,7 @@
     }, { passive: true });
 
     // double-tap (or double-click) a photo to zoom in at that spot; drag to look around; double-tap again to zoom out.
-    // (Page pinch-zoom is switched off so the top bar keeps its size — this replaces it for photos.)
+    // (Swiping owns the gallery's touch gestures, so photo zoom is a double-tap rather than a pinch.)
     const ZOOM = 2.5;
     let zImg = null, zx = 0, zy = 0;
     function zoom(img, px, py) {

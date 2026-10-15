@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Paribesh Bandhu · Jury Portal</title>
   <meta name="description" content="Paribesh Bandhu jury submissions — details, photographs and documents.">
   <meta name="theme-color" content="#4b5f2a">
@@ -16,7 +16,7 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header class="topbar" id="topbar" hidden>
+  <header class="topbar vv-pin" id="topbar" hidden>
     <div class="brand">
       <img src="icons/icon-192.png" alt="" width="36" height="36">
       <div>
@@ -36,6 +36,7 @@
       </div>
     </div>
   </header>
+  <div id="topbarSpacer" aria-hidden="true"></div>
 
   <div class="demo-banner" id="demoBanner" hidden>
     Demo mode — data is stored only in this browser. Try <b>9800000000</b> or <b>9811111111</b> (jury) or <b>9822222222</b> (admin).
@@ -45,7 +46,7 @@
 
   <div class="install-tip" id="installTip" hidden></div>
   <div class="toast" id="toast" role="status" hidden></div>
-  <div class="overlay" id="overlay" hidden><div class="spinner"></div><div id="overlayMsg">Please wait…</div></div>
+  <div class="overlay vv-pin vv-full" id="overlay" hidden><div class="spinner"></div><div id="overlayMsg">Please wait…</div></div>
 
   <script src="config.js"></script>
   <script src="app.js"></script>
