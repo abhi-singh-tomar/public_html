@@ -3,9 +3,9 @@
  *  This is the ONLY file you normally need to edit.
  * ============================================================= */
 window.APP_CONFIG = {
-  // Paste the Apps Script Web App URL (ends in /exec).
-  // Leave as-is to run in DEMO mode (data stays in this browser only).
-  API_URL: 'https://script.google.com/macros/s/AKfycbyPzjclmWpHI_CaPl2-ilOYRU9T3Hnm-aYeilOD4mijLAStjreANOPc407gBpzE2Qhq/exec',
+  // The PHP + MySQL API on this site. (Emergency rollback: put the Apps Script /exec URL back here
+  // and run rollback() in the Apps Script editor.)
+  API_URL: 'api/index.php',
 
   APP_NAME: 'Paribesh Bandhu',
   APP_SUBTITLE: 'Jury Portal',
