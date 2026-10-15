@@ -132,6 +132,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--green); box-shad
 .storage .progress { margin-top: 6px; }
 .storage.warn .progress > div { background: var(--terra); }
 .storage.warn { color: var(--terra); }
+.contrib-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0 16px; align-items: start; }
+#ocq { margin-bottom: 4px; }
+.oc-group { margin: 14px 0 4px; font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--terra); }
+.oc-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 4px; border: 0; border-bottom: 1px solid var(--line); background: none; font: inherit; text-align: left; cursor: pointer; color: inherit; }
+.oc-row:hover { background: #fbf7ef; }
+.oc-main { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.oc-go { font-size: 1.4rem; color: var(--muted); }
 .lb-cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 12px 16px; background: rgba(0,0,0,.6); color: #fff; text-align: center; font-size: .95rem; }
 .files { list-style: none; padding: 0; margin: 12px 0 0; }
 .files li { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: .9rem; }

@@ -65,7 +65,7 @@
   /* ---------------- session ---------------- */
   function saveSession() { store.set('pbj_session', { token: S.token, user: S.user }); }
   function logout(expired) {
-    S.token = null; S.user = null; S.submissions = []; S.submission = null; S.files = []; S.imgCache = {}; S.adminMembers = null; S.adminEdit = null; S.storage = null;
+    S.token = null; S.user = null; S.submissions = []; S.submission = null; S.files = []; S.imgCache = {}; S.adminMembers = null; S.adminEdit = null; S.storage = null; S.totals = null; S.otherCommittees = null;
     store.del('pbj_session');
     $('#topbar').hidden = true;
     renderLogin();
@@ -257,15 +257,24 @@
       <div class="card">${list.length ? `<div class="table-wrap"><table class="responsive"><thead><tr><th>Committee</th><th>Area</th><th>Status</th><th>Marks</th><th>Files</th><th>Updated</th></tr></thead><tbody>
         ${list.map(s => `<tr class="click" data-id="${esc(s.id)}"><td data-l="Committee"><b>${esc(s.committeeName || '—')}</b></td><td data-l="Area">${esc(s.area || '—')}</td>
           <td data-l="Status">${statusBadge(s.status)}</td><td data-l="Marks">${marksText(s.marks)}</td><td data-l="Files">${s.photos} 📷 · ${s.videos || 0} 🎥 · ${s.documents} 📎</td><td data-l="Updated">${fmtDate(s.updatedAt)}</td></tr>`).join('')}
-        </tbody></table></div>` : '<div class="muted">No committee forms yet. Tap <b>+ New committee</b> to start.</div>'}</div>`;
+        </tbody></table></div>` : '<div class="muted">No committee forms yet. Tap <b>+ New committee</b> to start.</div>'}</div>
+      <div class="card" id="otherCard">
+        <h2 style="margin-top:0">Add evidence to another committee</h2>
+        <p class="muted small" style="margin:-4px 0 10px">Visited a committee that someone else in your group already filled in? Add your photos and videos to it here — they go into the same committee folder.</p>
+        <input id="ocq" type="search" placeholder="Search all committees by name, area or jury member…" autocomplete="off">
+        <div id="ocList"><div class="muted small" style="margin-top:8px">Loading…</div></div>
+      </div>`;
     $('#newSub').onclick = () => openSubmission(null);
     $$('tr.click', app).forEach(tr => tr.onclick = () => openSubmission(tr.dataset.id));
+    $('#ocq').oninput = drawOtherCommittees;
+    if (S.otherCommittees) drawOtherCommittees();
+    loadOtherCommittees();
   }
 
   async function openSubmission(id) {
-    if (!id) { S.submission = null; S.files = []; return renderSubmission(); }
+    if (!id) { S.submission = null; S.files = []; S.totals = null; return renderSubmission(); }
     busy(true, 'Loading…');
-    try { const r = await api('getSubmission', { id }); S.submission = r.submission; S.files = r.files || []; if (r.storage) S.storage = r.storage; renderSubmission(); }
+    try { const r = await api('getSubmission', { id }); S.submission = r.submission; S.files = []; setFiles(r); renderSubmission(); }
     catch (err) { toast(err.message, true); }
     finally { busy(false); }
   }
@@ -314,29 +323,9 @@
       ${s.scoring ? `<div class="notice" style="margin-top:4px"><b>Total marks: <span id="scoreTotal">${marksText(scoreTotal(v))}</span></b></div>` : ''}`;
   }
 
-  /** One committee form (new when S.submission is null). With S.adminEdit set, an admin is editing a jury member's form. */
-  function renderSubmission() {
-    const v = currentValues();
-    const sub = S.submission, adm = S.adminEdit;
-    const status = sub ? sub.status : 'Not started';
-    app.innerHTML = `
-      <button class="btn btn-ghost btn-sm" id="backList" style="margin-bottom:12px">${adm ? '← Back to committee' : '← My committees'}</button>
-      <div class="row" style="margin-bottom:12px">
-        <div><h1>${sub ? esc(sub.committeeName || 'Committee') : 'New committee'}</h1><div class="muted small">${sub ? 'Last saved ' + fmtDate(sub.updatedAt) : 'Fill in the details and add photographs, videos & documents.'}${adm ? ' · Jury: ' + esc(adm.member.name || adm.email) : ''}</div></div>
-        <div class="spacer"></div>${statusBadge(status)}
-      </div>
-      ${adm ? '<div class="notice warn">You are editing this form as <b>admin</b>. Changes to details and files are saved to the jury member\'s form and logged.</div>'
-        : status === 'Submitted' ? '<div class="notice">Submitted. You can still update details or add files — changes are logged. <button type="button" class="btn btn-primary btn-sm" id="another" style="margin-left:6px">+ Start another committee</button></div>' : ''}
-      <div class="grid grid-main">
-        <form class="card" id="subForm" novalidate>
-          ${CFG.SECTIONS.map(s => sectionHTML(s, v)).join('')}
-          <div class="actions-bar sticky-m">
-            ${adm ? '<button type="submit" class="btn btn-primary">Save changes</button>' : `
-            <button type="button" class="btn btn-ghost" id="saveDraft">Save draft</button>
-            <button type="submit" class="btn btn-primary">${status === 'Submitted' ? 'Update submission' : 'Submit'}</button>`}
-          </div>
-        </form>
-        <div class="sticky-col">
+  /** Photos / videos / documents cards — shared by the full form and the "add evidence" screen. */
+  function mediaCardsHTML() {
+    return `
           <div class="card">
             <div class="row"><h2 style="margin:0">Photographs</h2><div class="spacer"></div><span class="muted small" id="photoCount"></span></div>
             <p class="muted small" style="margin:4px 0 10px">Photos are compressed automatically before upload.</p>
@@ -375,7 +364,48 @@
             </div>
             <div class="progress" id="docProg" hidden><div></div></div>
             <ul class="files" id="docList"></ul>
+          </div>`;
+  }
+
+  function bindMediaHandlers() {
+    const photoHandler = async files => uploadMany(files, 'photo');
+    $('#camIn').onchange = e => { photoHandler(e.target.files); e.target.value = ''; };
+    $('#photoIn').onchange = e => { photoHandler(e.target.files); e.target.value = ''; };
+    $('#docIn').onchange = e => { uploadMany(e.target.files, 'document'); e.target.value = ''; };
+    $('#vidCam').onchange = e => { uploadMany(e.target.files, 'video'); e.target.value = ''; };
+    $('#vidIn').onchange = e => { uploadMany(e.target.files, 'video'); e.target.value = ''; };
+    setupDrop($('#photoDrop'), fs => photoHandler(fs));
+    setupDrop($('#videoDrop'), fs => uploadMany(fs, 'video'));
+    setupDrop($('#docDrop'), fs => uploadMany(fs, 'document'));
+    $('#videoCancel').onclick = cancelVideo;
+    renderFiles(); updateStorageUI(); renderPendingUploads();
+    if (VUP.active) vprog.set(0, 'Upload in progress…');   // re-rendered while a video is uploading
+  }
+
+  /** One committee form (new when S.submission is null). With S.adminEdit set, an admin is editing a jury member's form. */
+  function renderSubmission() {
+    const v = currentValues();
+    const sub = S.submission, adm = S.adminEdit;
+    const status = sub ? sub.status : 'Not started';
+    app.innerHTML = `
+      <button class="btn btn-ghost btn-sm" id="backList" style="margin-bottom:12px">${adm ? '← Back to committee' : '← My committees'}</button>
+      <div class="row" style="margin-bottom:12px">
+        <div><h1>${sub ? esc(sub.committeeName || 'Committee') : 'New committee'}</h1><div class="muted small">${sub ? 'Last saved ' + fmtDate(sub.updatedAt) : 'Fill in the details and add photographs, videos & documents.'}${adm ? ' · Jury: ' + esc(adm.member.name || adm.email) : ''}</div></div>
+        <div class="spacer"></div>${statusBadge(status)}
+      </div>
+      ${adm ? '<div class="notice warn">You are editing this form as <b>admin</b>. Changes to details and files are saved to the jury member\'s form and logged.</div>'
+        : status === 'Submitted' ? '<div class="notice">Submitted. You can still update details or add files — changes are logged. <button type="button" class="btn btn-primary btn-sm" id="another" style="margin-left:6px">+ Start another committee</button></div>' : ''}
+      <div class="grid grid-main">
+        <form class="card" id="subForm" novalidate>
+          ${CFG.SECTIONS.map(s => sectionHTML(s, v)).join('')}
+          <div class="actions-bar sticky-m">
+            ${adm ? '<button type="submit" class="btn btn-primary">Save changes</button>' : `
+            <button type="button" class="btn btn-ghost" id="saveDraft">Save draft</button>
+            <button type="submit" class="btn btn-primary">${status === 'Submitted' ? 'Update submission' : 'Submit'}</button>`}
           </div>
+        </form>
+        <div class="sticky-col">
+          ${mediaCardsHTML()}
           <div class="card">
             <h2>Report</h2>
             <p class="muted small" style="margin:4px 0 10px">Download a PDF of your submitted details with photographs.</p>
@@ -397,20 +427,80 @@
     });
     if ($('#saveDraft')) $('#saveDraft').onclick = () => saveSubmission('Draft');
     form.onsubmit = e => { e.preventDefault(); saveSubmission(adm ? sub.status : 'Submitted'); };
-
-    const photoHandler = async files => uploadMany(files, 'photo');
-    $('#camIn').onchange = e => { photoHandler(e.target.files); e.target.value = ''; };
-    $('#photoIn').onchange = e => { photoHandler(e.target.files); e.target.value = ''; };
-    $('#docIn').onchange = e => { uploadMany(e.target.files, 'document'); e.target.value = ''; };
-    $('#vidCam').onchange = e => { uploadMany(e.target.files, 'video'); e.target.value = ''; };
-    $('#vidIn').onchange = e => { uploadMany(e.target.files, 'video'); e.target.value = ''; };
-    setupDrop($('#photoDrop'), fs => photoHandler(fs));
-    setupDrop($('#videoDrop'), fs => uploadMany(fs, 'video'));
-    setupDrop($('#docDrop'), fs => uploadMany(fs, 'document'));
     $('#pdfBtn').onclick = () => makePdf(adm ? adm.member : S.user, S.submission, S.files);
-    $('#videoCancel').onclick = cancelVideo;
-    renderFiles(); updateStorageUI(); renderPendingUploads();
-    if (VUP.active) vprog.set(0, 'Upload in progress…');   // re-rendered while a video is uploading
+    bindMediaHandlers();
+  }
+
+  /** Upload-only screen for adding evidence to a committee someone else filled in. */
+  function renderContribution() {
+    const sub = S.submission;
+    app.innerHTML = `
+      <button class="btn btn-ghost btn-sm" id="backList" style="margin-bottom:12px">← My committees</button>
+      <div class="row" style="margin-bottom:12px">
+        <div><h1>${esc(sub.committeeName || 'Committee')}</h1><div class="muted small">${esc(sub.location || '')} · Filled by ${esc(sub.filledBy || '—')}</div></div>
+        <div class="spacer"></div>${statusBadge(sub.status)}
+      </div>
+      <div class="notice">You're adding evidence to <b>${esc(sub.filledBy || 'another jury member')}</b>'s committee form — your photos, videos and documents go into the same committee folder.
+        Only your own uploads are shown here, and only you can delete them.</div>
+      <div class="contrib-grid">${mediaCardsHTML()}</div>`;
+    $('#backList').onclick = backToList;
+    bindMediaHandlers();
+  }
+
+  async function openContribution(id) {
+    busy(true, 'Loading…');
+    try {
+      const r = await api('getSubmission', { id });
+      S.submission = r.submission; setFiles(r);
+      if (r.contributor) { S.submission.contributor = true; renderContribution(); } else renderSubmission();
+    } catch (err) { toast(err.message, true); }
+    finally { busy(false); }
+  }
+
+  /** Keeps the files, committee totals and storage from any server reply in step. */
+  function setFiles(r) {
+    if (r.files) S.files = r.files;
+    if (r.totals) S.totals = r.totals;
+    if (r.storage) S.storage = r.storage;
+  }
+
+  /* ---- "Add evidence to another committee": committees in the member's areas first, plus search ---- */
+  const areaTokens = list => [...new Set(list.join(',').toLowerCase().split(/[,;\/&|]|\band\b/).map(s => s.trim()).filter(s => s.length >= 3))];
+  function inMyArea(c, tokens) {
+    const a = String(c.area || '').toLowerCase();
+    return tokens.some(t => a.includes(t) || (a.length >= 3 && t.includes(a)));
+  }
+
+  async function loadOtherCommittees() {
+    const box = $('#ocList'); if (!box) return;
+    try {
+      const r = await api('listCommittees');
+      S.otherCommittees = r;
+      drawOtherCommittees();
+    } catch (err) { box.innerHTML = `<div class="muted small">${esc(err.message)}</div>`; }
+  }
+
+  function drawOtherCommittees() {
+    const box = $('#ocList'), data = S.otherCommittees; if (!box || !data) return;
+    const all = data.committees || [], q = ($('#ocq') ? $('#ocq').value : '').trim().toLowerCase();
+    const row = c => `<button type="button" class="oc-row" data-cid="${esc(c.id)}">
+        <span class="oc-main"><b>${esc(c.committeeName || '—')}</b><br><span class="muted small">${esc(c.area || '—')} · Filled by ${esc(c.filledBy || '—')}</span></span>
+        ${c.myFiles ? `<span class="badge b-submitted">${c.myFiles} added</span>` : ''}<span class="oc-go" aria-hidden="true">›</span></button>`;
+    let html;
+    if (!all.length) html = '<div class="muted small">No other committees yet. When another jury member starts a committee form, it will appear here.</div>';
+    else if (q) {
+      const hits = all.filter(c => [c.committeeName, c.area, c.filledBy].join(' ').toLowerCase().includes(q));
+      html = hits.length ? `<div class="muted small" style="margin:8px 0 4px">${hits.length} committee${hits.length > 1 ? 's' : ''} found</div>${hits.slice(0, 50).map(row).join('')}`
+        : '<div class="muted small" style="margin-top:8px">No committee matches that search.</div>';
+    } else {
+      const tokens = areaTokens(data.myAreas || []);
+      const added = all.filter(c => c.myFiles), near = all.filter(c => !c.myFiles && inMyArea(c, tokens));
+      html = (added.length ? `<div class="oc-group">You've added to</div>${added.map(row).join('')}` : '') +
+        (near.length ? `<div class="oc-group">In your area</div>${near.map(row).join('')}`
+          : `<div class="muted small" style="margin-top:8px">${tokens.length ? 'No other committees in your area yet.' : 'Add your area in <b>My profile</b> to see nearby committees here.'} Use the search above to find any committee (${all.length} in total).</div>`);
+    }
+    box.innerHTML = html;
+    $$('.oc-row', box).forEach(b => b.onclick = () => openContribution(b.dataset.cid));
   }
 
   function setupDrop(el, cb) {
@@ -452,7 +542,7 @@
     try {
       const key = draftKey();
       const r = await api('saveSubmission', { id: S.submission ? S.submission.id : '', data: readForm(), status });
-      S.submission = r.submission; S.files = r.files || S.files; S.submissions = r.submissions || S.submissions;
+      S.submission = r.submission; setFiles(r); S.submissions = r.submissions || S.submissions;
       store.del(key);
       if (!quiet) { toast(S.adminEdit ? 'Changes saved ✓' : status === 'Submitted' ? 'Committee submitted ✓' : 'Draft saved'); renderSubmission(); }
       return true;
@@ -470,12 +560,14 @@
       if (!ok) return;
       const keep = readForm(); renderSubmission(); fillForm(keep);
     }
+    // limits are per committee, so count everyone's uploads (S.totals), not just the ones shown
+    const total = k => Math.max(S.files.filter(f => f.kind === k).length, (S.totals && S.totals[k]) || 0);
     if (kind === 'photo') {
-      const have = S.files.filter(f => f.kind === 'photo').length;
+      const have = total('photo');
       if (have + files.length > CFG.MAX_PHOTOS) return toast(`Maximum ${CFG.MAX_PHOTOS} photos per committee`, true);
     }
     if (kind === 'video') {
-      const have = S.files.filter(f => f.kind === 'video').length;
+      const have = total('video');
       if (have + files.length > CFG.MAX_VIDEOS) return toast(`Maximum ${CFG.MAX_VIDEOS} videos per committee`, true);
       return uploadVideos(files);
     }
@@ -503,7 +595,7 @@
         const before = new Set(S.files.map(x => x.id));
         payload.submissionId = S.submission.id;
         const r = await api('uploadFile', payload);
-        S.files = r.files; if (r.storage) S.storage = r.storage;
+        setFiles(r);
         if (kind === 'photo') { const nf = S.files.find(x => !before.has(x.id)); if (nf) S.imgCache[nf.id] = S._lastPhotoData; }
       } catch (err) { failed++; toast(err.message, true); }
       done++;
@@ -558,7 +650,7 @@
       const tag = files.length > 1 ? `Video ${i + 1} of ${files.length} · ` : '';
       try {
         const r = await uploadVideo(files[i], (p, t) => vprog.set(p, tag + t));
-        S.files = r.files; if (r.storage) S.storage = r.storage; ok++;
+        setFiles(r); ok++;
         renderFiles(); updateStorageUI();
       } catch (e) {
         if (e.cancelled) { toast('Upload cancelled'); break; }
@@ -704,7 +796,7 @@
       let r = await api('uploadStatus', { uploadId: p.uploadId });
       if (!r.done) { p.offset = r.received; pendingSave(p); r = await sendChunks(p, blob, job, (f, note) => vprog.set(f, note || `Resuming ${p.name} — ${fmtMB(f * blob.size / MB_)} of ${fmtMB(blob.size / MB_)}`)); }
       pendingDrop(p.uploadId);
-      S.files = r.files; if (r.storage) S.storage = r.storage;
+      setFiles(r);
       renderFiles(); updateStorageUI(); toast('Video uploaded ✓');
     } catch (e) {
       if (e.cancelled) { api('uploadCancel', { uploadId: p.uploadId }).catch(() => {}); pendingDrop(p.uploadId); toast('Upload cancelled'); }
@@ -850,6 +942,7 @@
   /** Small "📅 time · A C · caption" line under a photo/video (all optional details). */
   function evidenceLine(f) {
     const bits = [];
+    if (f.byOther && !f.mine && f.uploadedByName) bits.push(`<span title="Added by another jury member">👤 ${esc(f.uploadedByName)}</span>`);
     if (f.capturedAt) bits.push(`<span title="Taken (${esc(srcLabel[f.captureSource] || 'file date')})">📅 ${fmtDate(f.capturedAt)}</span>`);
     if (f.sections) bits.push(f.sections.split(',').map(k => `<span class="sec-tag" title="${esc((SCORE_FIELDS.find(s => s.key === 'score_' + k) || {}).label || k)}">${esc(k)}</span>`).join(''));
     if (f.lat != null) bits.push(`<a href="https://maps.google.com/?q=${f.lat},${f.lng}" target="_blank" rel="noopener" title="Location">📍</a>`);
@@ -860,8 +953,11 @@
     const photos = files.filter(f => f.kind === 'photo'), videos = files.filter(f => f.kind === 'video');
     const docs = files.filter(f => f.kind !== 'photo' && f.kind !== 'video');
     const thumbs = $('#thumbs', container), list = $('#docList', container), vlist = $('#videoList', container);
-    if ($('#photoCount', container)) $('#photoCount', container).textContent = photos.length ? `${photos.length} / ${CFG.MAX_PHOTOS}` : '';
-    if ($('#videoCount', container)) $('#videoCount', container).textContent = videos.length ? `${videos.length} / ${CFG.MAX_VIDEOS}` : '';
+    // when adding to someone else's committee, show the committee's totals (the limits apply to everyone's uploads)
+    const contrib = files === S.files && S.submission && S.submission.contributor && S.totals;
+    const count = (n, k, max) => contrib ? `Committee: ${S.totals[k]} / ${max}` : (n ? `${n} / ${max}` : '');
+    if ($('#photoCount', container)) $('#photoCount', container).textContent = count(photos.length, 'photo', CFG.MAX_PHOTOS);
+    if ($('#videoCount', container)) $('#videoCount', container).textContent = count(videos.length, 'video', CFG.MAX_VIDEOS);
     if (vlist) {
       // videos are too big to preview in the app; admins get a Drive link
       vlist.innerHTML = videos.length ? videos.map(v => `<li><span class="ficon">🎥</span><span class="nm" title="${esc(v.name)}">${esc(v.name)}
@@ -939,7 +1035,7 @@
         const r = await api('updateFileMeta', { fileId: f.id, caption: $('#mdCap', d).value.trim(),
           sections: $$('.chips input:checked', d).map(i => i.value).join(','),
           lat: loc ? loc.lat : '', lng: loc ? loc.lng : '', clearLocation: clearLoc && !loc });
-        S.files = r.files; renderFiles(); close(); toast('Details saved ✓');
+        setFiles(r); renderFiles(); close(); toast('Details saved ✓');
       } catch (err) { toast(err.message, true); }
       finally { busy(false); }
     };
@@ -969,7 +1065,7 @@
     const f = S.files.find(x => x.id === id);
     if (!f || !confirmBox(`Delete “${f.name}”?`)) return;
     busy(true, 'Deleting…');
-    try { const r = await api('deleteFile', { fileId: id }); S.files = r.files; delete S.imgCache[id]; renderFiles(); toast('Deleted'); }
+    try { const r = await api('deleteFile', { fileId: id }); setFiles(r); delete S.imgCache[id]; renderFiles(); updateStorageUI(); toast('Deleted'); }
     catch (err) { toast(err.message, true); }
     finally { busy(false); }
   }
@@ -1364,7 +1460,7 @@
     $('#aPdf').onclick = () => makePdf(member, sub, r.files);
     $('#aEdit').onclick = () => {
       S.adminEdit = { email, member };
-      S.submission = sub; S.files = r.files; S.storage = r.storage || null;
+      S.submission = sub; S.files = r.files; S.totals = r.totals; S.storage = r.storage || null;
       renderSubmission();
     };
   }
@@ -1380,6 +1476,7 @@
       if (!d) {
         d = { users: {
           '9800000000': { email: '9800000000', name: 'Demo Jury Member', phone: '9800000000', role: 'jury' },
+          '9811111111': { email: '9811111111', name: 'Second Jury Member', phone: '9811111111', role: 'jury' },
           '9822222222': { email: '9822222222', name: 'Demo Admin', phone: '9822222222', role: 'admin' }
         }, subs: {}, files: [], log: [] };
         store.set(this.key, d);
@@ -1393,10 +1490,22 @@
     subFiles(d, id) {
       return d.files.filter(f => f.sub === id && !f.deleted).map(f => ({ id: f.id, name: f.name, mimeType: f.mimeType, kind: f.kind, sizeKB: f.sizeKB, uploadedAt: f.uploadedAt,
         caption: f.caption || '', sections: f.sections || '', capturedAt: f.capturedAt || '', captureSource: f.captureSource || '',
-        lat: f.lat == null || f.lat === '' ? null : f.lat, lng: f.lng == null || f.lng === '' ? null : f.lng, originalSizeKB: f.originalSizeKB || f.sizeKB, compressed: !!f.compressed }));
+        lat: f.lat == null || f.lat === '' ? null : f.lat, lng: f.lng == null || f.lng === '' ? null : f.lng, originalSizeKB: f.originalSizeKB || f.sizeKB, compressed: !!f.compressed,
+        uploadedBy: f.by || f.email }));
     },
+    // same rules as filesView_ / filesReply_ in Code.gs
+    view(d, u, s) {
+      const all = this.subFiles(d, s.id).map(f => Object.assign(f, { uploadedByName: (d.users[f.uploadedBy] || {}).name || f.uploadedBy, mine: f.uploadedBy === u.email, byOther: f.uploadedBy !== s.email,
+        url: u.role === 'admin' ? 'https://drive.google.com/' : undefined }));
+      const totals = { photo: 0, video: 0, document: 0 };
+      all.forEach(f => { totals[f.kind === 'photo' || f.kind === 'video' ? f.kind : 'document']++; });
+      return { files: s.email === u.email || u.role === 'admin' ? all : all.filter(f => f.mine), totals };
+    },
+    chargeTo(u, s) { return u.role === 'admin' ? s.email : u.email; },
+    reply(d, u, s, extra) { return Object.assign({ ok: true }, this.view(d, u, s), { storage: this.storage(d, this.chargeTo(u, s)) }, extra || {}); },
+    canManage(u, f) { return f.by === u.email || (!f.by && f.email === u.email) || f.email === u.email || u.role === 'admin'; },
     storage(d, email) {
-      const used = d.files.filter(f => f.email === email && !f.deleted).reduce((a, f) => a + f.sizeKB, 0) / 1024, q = CFG.MEMBER_QUOTA_MB;
+      const used = d.files.filter(f => (f.charged || f.email) === email && !f.deleted).reduce((a, f) => a + f.sizeKB, 0) / 1024, q = CFG.MEMBER_QUOTA_MB;
       return { usedMB: Math.round(used * 10) / 10, quotaMB: q, leftMB: Math.max(0, Math.round((q - used) * 10) / 10), warn: used >= q * 0.8 };
     },
     quotaError(d, email, bytes) {
@@ -1446,21 +1555,30 @@
           u.name = b.name.trim(); u.altEmail = b.contactEmail; u.alternate = b.altPhone; u.assignedArea = b.area;
           this.log(d, u, 'PROFILE_UPDATED'); this.save(d); return { ok: true, user: this.pub(u) };
         }
+        case 'listCommittees': {
+          const mine = {};
+          d.files.forEach(f => { if (!f.deleted && f.by === u.email) mine[f.sub] = (mine[f.sub] || 0) + 1; });
+          const subs = Object.values(d.subs);
+          return { ok: true, myAreas: subs.filter(s => s.email === u.email).map(s => s.location).concat(u.assignedArea ? [u.assignedArea] : []),
+            committees: subs.filter(s => s.email !== u.email).map(s => ({ id: s.id, committeeName: s.committeeName, area: s.location, status: s.status,
+              filledBy: (d.users[s.email] || {}).name || s.memberName || '', myFiles: mine[s.id] || 0, updatedAt: s.updatedAt }))
+              .sort((a, b) => String(a.committeeName).localeCompare(String(b.committeeName))) };
+        }
         case 'uploadStart': {
           const s = d.subs[b.submissionId];
-          if (!s || (s.email !== u.email && u.role !== 'admin')) return { ok: false, error: 'Please save the committee details before uploading files' };
+          if (!s) return { ok: false, error: 'Please save the committee details before uploading files' };
           if (this.subFiles(d, s.id).filter(f => f.kind === 'video').length >= CFG.MAX_VIDEOS) return { ok: false, error: `Maximum ${CFG.MAX_VIDEOS} videos per committee` };
           if (b.size > CFG.MAX_VIDEO_MB * 1048576) return { ok: false, error: `Video is larger than ${CFG.MAX_VIDEO_MB} MB` };
-          const qe = this.quotaError(d, s.email, b.size); if (qe) return { ok: false, error: qe };
+          const qe = this.quotaError(d, this.chargeTo(u, s), b.size); if (qe) return { ok: false, error: qe };
           const uploadId = 'U' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-          d.uploads[uploadId] = { sub: s.id, name: b.name, mime: b.mimeType, size: b.size, got: 0, meta: this.meta(b), compressed: !!b.compressed, originalSize: b.originalSize || b.size };
+          d.uploads[uploadId] = { sub: s.id, by: u.email, charged: this.chargeTo(u, s), name: b.name, mime: b.mimeType, size: b.size, got: 0, meta: this.meta(b), compressed: !!b.compressed, originalSize: b.originalSize || b.size };
           this.save(d);
           return { ok: true, uploadId, chunkSize: 5 * 1024 * 1024, received: 0 };
         }
         case 'uploadChunk': case 'uploadStatus': {
           const up = d.uploads[b.uploadId];
-          if (!up) return { ok: false, error: 'Video upload expired — please upload it again' };
-          if (up.done) return { ok: true, done: true, files: this.subFiles(d, up.sub), storage: this.storage(d, d.subs[up.sub].email) };
+          if (!up || (up.by && up.by !== u.email)) return { ok: false, error: 'Video upload expired — please upload it again' };
+          if (up.done) return this.reply(d, u, d.subs[up.sub], { done: true });
           if (b.action === 'uploadChunk') {
             if (this.failNext) { this.failNext--; return { ok: false, error: 'No internet connection. Please try again.' }; }   // used by the UI test
             if (b.offset !== up.got) return { ok: false, error: 'Video upload failed (400). Please try again.' };
@@ -1469,24 +1587,28 @@
           if (up.got < up.size) { this.save(d); return { ok: true, done: false, received: up.got }; }
           up.done = true;
           const s = d.subs[up.sub];
-          d.files.push({ id: 'f' + Date.now() + Math.random().toString(36).slice(2, 6), sub: s.id, email: s.email, name: up.name, mimeType: up.mime, kind: 'video', sizeKB: Math.round(up.size / 1024), uploadedAt: now,
+          d.files.push({ id: 'f' + Date.now() + Math.random().toString(36).slice(2, 6), sub: s.id, email: s.email, by: up.by || u.email, charged: up.charged || s.email,
+            name: up.name, mimeType: up.mime, kind: 'video', sizeKB: Math.round(up.size / 1024), uploadedAt: now,
             ...up.meta, compressed: up.compressed, originalSizeKB: Math.round(up.originalSize / 1024) });
           this.log(d, u, 'UPLOAD', `${s.committeeName} — video: ${up.name}`); this.save(d);
-          return { ok: true, done: true, files: this.subFiles(d, s.id), storage: this.storage(d, s.email) };
+          return this.reply(d, u, s, { done: true });
         }
         case 'uploadCancel': { delete d.uploads[b.uploadId]; this.save(d); return { ok: true }; }
         case 'updateFileMeta': {
-          const f = d.files.find(x => x.id === b.fileId && !x.deleted && (x.email === u.email || u.role === 'admin'));
+          const f = d.files.find(x => x.id === b.fileId && !x.deleted && this.canManage(u, x));
           if (!f) return { ok: false, error: 'File not found' };
           const m = this.meta(b); f.caption = m.caption; f.sections = m.sections;
           if (b.clearLocation) { f.lat = ''; f.lng = ''; } else if (m.lat !== '') { f.lat = m.lat; f.lng = m.lng; }
-          this.save(d); return { ok: true, files: this.subFiles(d, f.sub) };
+          this.save(d); return this.reply(d, u, d.subs[f.sub]);
         }
         case 'getSubmission': {
           const s = d.subs[b.id];
-          if (!s || (s.email !== u.email && u.role !== 'admin')) return { ok: false, error: 'Committee form not found' };
-          const files = this.subFiles(d, s.id).map(f => u.role === 'admin' ? Object.assign({ url: 'https://drive.google.com/' }, f) : f);
-          return { ok: true, submission: Object.assign({}, s, { folderUrl: u.role === 'admin' ? 'https://drive.google.com/' : undefined }), files, storage: this.storage(d, s.email) };
+          if (!s) return { ok: false, error: 'Committee form not found' };
+          if (s.email !== u.email && u.role !== 'admin') {
+            return Object.assign(this.reply(d, u, s), { contributor: true, storage: this.storage(d, u.email),
+              submission: { id: s.id, committeeName: s.committeeName, location: s.location, status: s.status, filledBy: (d.users[s.email] || {}).name || s.memberName } });
+          }
+          return Object.assign(this.reply(d, u, s), { submission: Object.assign({}, s, { folderUrl: u.role === 'admin' ? 'https://drive.google.com/' : undefined }), storage: this.storage(d, s.email) });
         }
         case 'saveSubmission': {
           if (!b.data.committeeName || !b.data.area) return { ok: false, error: 'Committee name and area are needed to save' };
@@ -1497,20 +1619,26 @@
           d.subs[id] = { id, email: s ? s.email : u.email, data: b.data, status: st, committeeName: b.data.committeeName, memberName: b.data.memberName, location: b.data.area, createdAt: s ? s.createdAt : now, updatedAt: now };
           this.log(d, u, s ? (b.status === 'Submitted' ? 'SUBMITTED' : 'SUBMISSION_UPDATED') : 'SUBMISSION_CREATED', `${b.data.committeeName} - ${b.data.area}`);
           this.save(d);
-          return { ok: true, submission: d.subs[id], files: this.subFiles(d, id), submissions: this.summaries(d, d.subs[id].email) };
+          const v = this.view(d, u, d.subs[id]);
+          return { ok: true, submission: d.subs[id], files: v.files, totals: v.totals, submissions: this.summaries(d, d.subs[id].email) };
         }
         case 'uploadFile': {
           const s = d.subs[b.submissionId];
-          if (!s || (s.email !== u.email && u.role !== 'admin')) return { ok: false, error: 'Please save the committee details before uploading files' };
+          if (!s) return { ok: false, error: 'Please save the committee details before uploading files' };
           if (b.kind === 'photo' && this.subFiles(d, s.id).filter(f => f.kind === 'photo').length >= CFG.MAX_PHOTOS) return { ok: false, error: `Maximum ${CFG.MAX_PHOTOS} photos per committee` };
           const id = 'f' + Date.now() + Math.random().toString(36).slice(2, 6);
           const sizeKB = Math.round(b.base64.length * 0.75 / 1024);
-          const qe = this.quotaError(d, s.email, sizeKB * 1024); if (qe) return { ok: false, error: qe };
-          d.files.push({ id, sub: s.id, email: s.email, name: b.name, mimeType: b.mimeType, kind: b.kind, sizeKB, uploadedAt: now, ...(b.kind === 'photo' ? this.meta(b) : {}) });
+          const qe = this.quotaError(d, this.chargeTo(u, s), sizeKB * 1024); if (qe) return { ok: false, error: qe };
+          d.files.push({ id, sub: s.id, email: s.email, by: u.email, charged: this.chargeTo(u, s), name: b.name, mimeType: b.mimeType, kind: b.kind, sizeKB, uploadedAt: now, ...(b.kind === 'photo' ? this.meta(b) : {}) });
           this.files[id] = b; this.log(d, u, 'UPLOAD', `${s.committeeName} — ${b.kind}: ${b.name} (${sizeKB} KB)`); this.save(d);
-          return { ok: true, files: this.subFiles(d, s.id), storage: this.storage(d, s.email) };
+          return this.reply(d, u, s);
         }
-        case 'deleteFile': { const f = d.files.find(x => x.id === b.fileId && (x.email === u.email || u.role === 'admin')); if (f) { f.deleted = true; this.log(d, u, 'FILE_DELETED', f.name); } this.save(d); return { ok: true, files: f ? this.subFiles(d, f.sub) : [], storage: f ? this.storage(d, f.email) : null }; }
+        case 'deleteFile': {
+          const f = d.files.find(x => x.id === b.fileId && !x.deleted && this.canManage(u, x));
+          if (!f) return { ok: false, error: 'File not found' };
+          f.deleted = true; this.log(d, u, 'FILE_DELETED', f.name); this.save(d);
+          return Object.assign(this.reply(d, u, d.subs[f.sub]), { storage: this.storage(d, u.role === 'admin' ? (f.charged || f.email) : u.email) });
+        }
         case 'getFile': { const f = this.files[b.fileId]; if (!f) return { ok: false, error: 'Demo files are kept only until the page is reloaded' }; return { ok: true, mimeType: f.mimeType, base64: f.base64 }; }
       }
       if (u.role !== 'admin') return { ok: false, error: 'Not permitted' };
