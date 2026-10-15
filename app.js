@@ -319,8 +319,26 @@
   function sectionHTML(s, v) {
     return `<div class="section-title"><span class="dot"></span><h2 style="margin:0">${esc(s.title)}</h2></div>
       ${s.hint ? `<p class="muted small" style="margin:-4px 0 10px">${esc(s.hint)}</p>` : ''}
-      ${s.fields.map(f => fieldHTML(f, v[f.key])).join('')}
-      ${s.scoring ? `<div class="notice" style="margin-top:4px"><b>Total marks: <span id="scoreTotal">${marksText(scoreTotal(v))}</span></b></div>` : ''}`;
+      ${s.scoring ? scoreTableHTML(s, v) : s.fields.map(f => fieldHTML(f, v[f.key])).join('')}`;
+  }
+
+  /** "A. Eco-Friendly …" → ['A', 'Eco-Friendly …'] */
+  const splitLabel = l => { const m = /^([A-Z])\.\s*(.*)$/.exec(l); return m ? [m[1], m[2]] : ['', l]; };
+  const totalText = n => n == null ? '—' : String(n);
+
+  /** Marks as a table: Section | Area | Max | Marks, with a running total row. readOnly = admin view. */
+  function scoreTableHTML(s, v, readOnly) {
+    return `<div class="table-wrap"><table class="score-table">
+      <thead><tr><th class="sec">Sec.</th><th>Area</th><th class="num">Max</th><th class="num">Marks</th></tr></thead>
+      <tbody>${s.fields.map(f => {
+        const [k, area] = splitLabel(f.label), val = v[f.key] == null ? '' : v[f.key];
+        return `<tr><td class="sec">${esc(k)}</td><td>${readOnly ? esc(area) : `<label for="f_${esc(f.key)}">${esc(area)}</label>`}</td>
+          <td class="num muted">${f.max}</td>
+          <td class="num">${readOnly ? `<b>${val === '' ? '—' : esc(val)}</b>`
+            : `<input id="f_${esc(f.key)}" name="${esc(f.key)}" type="number" inputmode="decimal" min="0" max="${f.max}" step="any" value="${esc(val)}" placeholder="—" aria-label="${esc(f.label)}, marks out of ${f.max}">`}</td></tr>`;
+      }).join('')}</tbody>
+      <tfoot><tr><td></td><td><b>Total</b></td><td class="num"><b>${SCORE_MAX}</b></td><td class="num"><b id="${readOnly ? 'scoreTotalRO' : 'scoreTotal'}">${totalText(scoreTotal(v))}</b></td></tr></tfoot>
+    </table></div>`;
   }
 
   /** Photos / videos / documents cards — shared by the full form and the "add evidence" screen. */
@@ -423,7 +441,7 @@
     form.addEventListener('input', () => {
       const d = readForm();
       store.set(draftKey(), d);
-      if ($('#scoreTotal')) $('#scoreTotal').textContent = marksText(scoreTotal(d));
+      if ($('#scoreTotal')) $('#scoreTotal').textContent = totalText(scoreTotal(d));
     });
     if ($('#saveDraft')) $('#saveDraft').onclick = () => saveSubmission('Draft');
     form.onsubmit = e => { e.preventDefault(); saveSubmission(adm ? sub.status : 'Submitted'); };
@@ -1441,8 +1459,8 @@
       <div class="grid grid-main">
         <div class="card">
           ${CFG.SECTIONS.map(s => `<div class="section-title"><span class="dot"></span><h2 style="margin:0">${esc(s.title)}</h2></div>
-            <dl class="kv">${s.fields.map(f => `<dt>${esc(f.label)}</dt><dd>${esc(data[f.key] || '—')}${f.max != null && data[f.key] ? ` <span class="muted small">/ ${f.max}</span>` : ''}</dd>`).join('')}
-            ${s.scoring ? `<dt><b>Total marks</b></dt><dd><b>${marksText(scoreTotal(data))}</b></dd>` : ''}</dl>`).join('<div style="height:10px"></div>')}
+            ${s.scoring ? scoreTableHTML(s, data, true)
+              : `<dl class="kv">${s.fields.map(f => `<dt>${esc(f.label)}</dt><dd>${esc(data[f.key] || '—')}</dd>`).join('')}</dl>`}`).join('<div style="height:10px"></div>')}
           <p class="muted small" style="margin-top:14px">Created ${fmtDate(sub.createdAt)} · Updated ${fmtDate(sub.updatedAt)}</p>
         </div>
         <div>

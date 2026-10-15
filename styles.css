@@ -132,6 +132,16 @@ input:focus, select:focus, textarea:focus { border-color: var(--green); box-shad
 .storage .progress { margin-top: 6px; }
 .storage.warn .progress > div { background: var(--terra); }
 .storage.warn { color: var(--terra); }
+.score-table { margin-bottom: 14px; }
+.score-table th, .score-table td { padding: 7px 6px; vertical-align: middle; }
+.score-table .sec { width: 34px; text-align: center; font-weight: 700; color: var(--green-d); }
+.score-table .num { width: 64px; text-align: right; white-space: nowrap; }
+.score-table td.num:last-child { width: 92px; }
+.score-table label { display: block; font-weight: 500; margin: 0; cursor: pointer; }
+.score-table input { width: 84px; padding: 7px 8px; text-align: right; font-size: 1rem; margin: 0; }
+.score-table input:invalid { border-color: var(--danger); }
+.score-table tbody tr:nth-child(odd) { background: #fbf8f2; }
+.score-table tfoot td { border-top: 2px solid var(--green); border-bottom: 0; background: var(--green-l); font-size: 1rem; }
 .contrib-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0 16px; align-items: start; }
 #ocq { margin-bottom: 4px; }
 .oc-group { margin: 14px 0 4px; font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--terra); }
