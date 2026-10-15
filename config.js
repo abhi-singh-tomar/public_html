@@ -18,7 +18,18 @@ window.APP_CONFIG = {
   PHOTO_TARGET_KB: 450,     // tries to stay under this
   MAX_PHOTOS: 15,           // per committee form
   MAX_VIDEOS: 8,            // per committee form
-  MAX_VIDEO_MB: 200,        // per video (keep in step with Code.gs)
+  MAX_VIDEO_MB: 800,        // per video (keep in step with Code.gs)
+  MEMBER_QUOTA_MB: 4096,    // storage per jury member, shown in the app (Code.gs enforces it)
+
+  // Videos are compressed on the phone before upload when the browser supports it (WebCodecs).
+  // Where it doesn't (or compression would not save much), the original is uploaded unchanged.
+  VIDEO_COMPRESS: {
+    enabled: true,
+    overMB: 25,             // only compress videos bigger than this
+    maxSide: 1280,          // longest side after compression (1280 = 720p)
+    bitrate: 2500000        // video bitrate in bits/s (≈ 19 MB per minute)
+  },
+  MEDIABUNNY_URL: 'https://cdn.jsdelivr.net/npm/mediabunny@1.60.0/dist/bundles/mediabunny.min.mjs',
   MAX_DOC_MB: 15,
 
   /* ----------------------------------------------------------
