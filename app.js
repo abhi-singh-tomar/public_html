@@ -92,6 +92,8 @@
     setupMenu();
     setupInstall();
     setupZoomPins();
+    // app-like: no page zoom. iOS Safari ignores user-scalable=no, so stop its pinch gesture here.
+    ['gesturestart', 'gesturechange'].forEach(t => document.addEventListener(t, e => e.preventDefault(), { passive: false }));
     resume();
   }
 

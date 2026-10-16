@@ -16,10 +16,10 @@ AddType application/javascript .js
 
 # Always fetch latest app code; cache icons
 <IfModule mod_headers.c>
-  <FilesMatch "^(sw\.js|config\.js|app\.js|index\.html|manifest\.webmanifest)$">
+  <FilesMatch "^(sw\.js|config\.js|app\.js|styles\.css|index\.html|manifest\.webmanifest)$">
     Header set Cache-Control "no-cache, must-revalidate"
   </FilesMatch>
-  <FilesMatch "\.(png|css)$">
+  <FilesMatch "\.png$">
     Header set Cache-Control "public, max-age=604800"
   </FilesMatch>
   Header always set X-Content-Type-Options "nosniff"
