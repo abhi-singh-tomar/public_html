@@ -495,6 +495,7 @@
                 accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,image/*,application/pdf"></label>
             </div>
             <div class="progress" id="docProg" hidden><div></div></div>
+            <div class="thumbs" id="docThumbs" hidden></div>
             <ul class="files" id="docList"></ul>
           </div>`;
   }
@@ -1084,8 +1085,12 @@
   }
 
   function renderFiles(container = document, files = S.files, canEdit = true) {
+    Peek.hide();
     const photos = files.filter(f => f.kind === 'photo'), videos = files.filter(f => f.kind === 'video');
-    const docs = files.filter(f => f.kind !== 'photo' && f.kind !== 'video');
+    const docThumbs = $('#docThumbs', container);
+    const allDocs = files.filter(f => f.kind !== 'photo' && f.kind !== 'video');
+    // pictures added as documents get thumbnails too, never a full-size image in the page
+    const docImgs = docThumbs ? allDocs.filter(isImg) : [], docs = allDocs.filter(f => !docImgs.includes(f));
     const thumbs = $('#thumbs', container), list = $('#docList', container), vlist = $('#videoList', container);
     // when adding to someone else's committee, show the committee's totals (the limits apply to everyone's uploads)
     const contrib = files === S.files && S.submission && S.submission.contributor && S.totals;
@@ -1107,20 +1112,31 @@
           ${p.caption || evidenceLine(p) ? `<div class="thumb-cap small">${p.caption ? esc(p.caption) + ' ' : ''}<span class="muted">${evidenceLine(p)}</span></div>` : ''}</div>`).join('')
         : '<div class="muted small" style="grid-column:1/-1">No photos yet.</div>';
     }
-    loadThumbs(photos.concat(videos));
+    if (docThumbs) {
+      docThumbs.innerHTML = docImgs.map(d => `<div class="thumb-wrap"><div class="thumb" data-id="${esc(d.id)}" data-gal="${esc(d.id)}" data-set="doc">${thumbImg(d.id, d.name)}
+          ${canEdit ? `<button class="x" data-del="${esc(d.id)}" aria-label="Delete">×</button>` : ''}</div>
+          <div class="thumb-cap one small muted" title="${esc(d.name)}">${esc(d.name)}</div></div>`).join('');
+      docThumbs.hidden = !docImgs.length;
+    }
+    loadThumbs(photos.concat(videos, docImgs));
     if (list) {
       list.innerHTML = docs.length ? docs.map(d => `<li><span class="ficon">${esc(ext(d.name))}</span><span class="nm" title="${esc(d.name)}">${esc(d.name)}<br><span class="muted small">${kb(d.sizeKB)} · ${fmtDate(d.uploadedAt)}</span></span>
           <button class="btn btn-ghost btn-sm" data-open="${esc(d.id)}">View</button>${canEdit ? `<button class="btn btn-danger btn-sm" data-del="${esc(d.id)}" aria-label="Delete">✕</button>` : ''}</li>`).join('')
-        : '<li class="muted small">No documents yet.</li>';
+        : docImgs.length ? '' : '<li class="muted small">No documents yet.</li>';
     }
     $$('[data-del]', container).forEach(b => b.onclick = () => deleteFile(b.dataset.del));
     $$('[data-meta]', container).forEach(b => b.onclick = () => metaDialog(files.find(f => f.id === b.dataset.meta)));
     $$('[data-open]', container).forEach(b => b.onclick = () => openFile(b.dataset.open, files));
-    // photos then videos, in one swipeable gallery
-    const media = photos.concat(videos);
-    $$('[data-gal]', container).forEach(el => el.onclick = e => {
-      if (e.target.closest('button') && e.target.closest('button') !== el) return;   // the ✎ / × buttons on a tile
-      openGallery(media, media.findIndex(f => f.id === el.dataset.gal));
+    // photos then videos, in one swipeable gallery; pictures among the documents get their own
+    const sets = { media: photos.concat(videos), doc: docImgs };
+    $$('[data-gal]', container).forEach(el => {
+      const set = sets[el.dataset.set || 'media'];
+      el.onclick = e => {
+        if (e.target.closest('button') && e.target.closest('button') !== el) return;   // the ✎ / × buttons on a tile
+        Peek.hide();
+        openGallery(set, set.findIndex(f => f.id === el.dataset.gal));
+      };
+      if (el.classList.contains('thumb')) Peek.bind(el, set.filter(isImg));
     });
   }
 
@@ -1234,6 +1250,8 @@
   /** <img> that fills in by itself when its preview arrives (see showThumb). */
   const thumbImg = (id, alt) => `<img data-thumb="${esc(id)}" ${thumbSrc(id) ? `src="${thumbSrc(id)}"` : ''} alt="${esc(alt || '')}" draggable="false">`;
   function showThumb(id) { $$(`img[data-thumb="${CSS.escape(id)}"]`).forEach(i => { i.src = Thumbs.mem[id]; }); }
+  /** A photo, or a picture uploaded as a document. */
+  const isImg = f => f.kind === 'photo' || (f.kind !== 'video' && (/^image\//.test(f.mimeType || '') || /\.(jpe?g|png|gif|webp|bmp|heic|heif)$/i.test(f.name || '')));
 
   async function loadThumbs(files) {
     const need = files.filter(f => !Thumbs.mem[f.id] && !loadingThumb[f.id] && !(Date.now() - (Thumbs.none[f.id] || 0) < 120000));
@@ -1255,7 +1273,7 @@
         } catch (e) { if (/unknown action/i.test(e.message)) serverThumbs = false; else break; }
       }
       // photos Drive has no preview for (or an older server): use the full photo, two at a time
-      const photos = rest.filter(f => f.kind === 'photo' && !Thumbs.mem[f.id]);
+      const photos = rest.filter(f => isImg(f) && !Thumbs.mem[f.id]);
       const worker = async () => {
         for (let f; (f = photos.shift());) {
           try { Thumbs.mem[f.id] = await fullImage(f.id); delete Thumbs.none[f.id]; showThumb(f.id); } catch (e) {}
@@ -1327,7 +1345,7 @@
     };
     const loadFull = i => {
       const f = items[i], img = slides[i] && slides[i].querySelector('img');
-      if (!f || f.kind !== 'photo' || img.dataset.full) return;
+      if (!f || !isImg(f) || img.dataset.full) return;
       img.dataset.full = '1';
       fullImage(f.id).then(src => { img.removeAttribute('data-thumb'); img.src = src; }).catch(() => delete img.dataset.full);
     };
@@ -1338,7 +1356,7 @@
       zoom(null);
       const f = items[i];
       $('.g-count', g).textContent = `${i + 1} / ${items.length}`;
-      $('.g-cap', g).innerHTML = [f.caption ? esc(f.caption) : '', evidenceLine(f)].filter(Boolean).join('<br>');
+      $('.g-cap', g).innerHTML = [f.caption ? esc(f.caption) : f.kind === 'document' ? esc(f.name) : '', evidenceLine(f)].filter(Boolean).join('<br>');
       $$('.g-th.on', reel).forEach(t => t.classList.remove('on'));
       const th = ths[i]; th.classList.add('on');
       reel.scrollTo({ left: th.offsetLeft - reel.clientWidth / 2 + th.offsetWidth / 2, behavior: 'smooth' });
@@ -1368,7 +1386,7 @@
     }
     const photoAt = target => {
       const s = target.closest('.g-slide'), i = s ? Array.prototype.indexOf.call(slides, s) : -1;
-      return i > -1 && items[i].kind === 'photo' ? s.querySelector('img') : null;
+      return i > -1 && isImg(items[i]) ? s.querySelector('img') : null;
     };
     let barTimer;
     const toggleZoom = (e, x, y) => { clearTimeout(barTimer); const img = photoAt(e.target); if (zImg || img) zoom(zImg ? null : img, x, y); };
@@ -1442,6 +1460,80 @@
     update();
     $('.g-close', g).focus({ preventScroll: true });
   }
+
+  /* ---------------- hover preview (mouse only): the full photo beside its thumbnail, ‹ › to step through ----------------
+   * Touch screens keep tap-to-open-gallery. The frame has a fixed size while it is open, so ‹ › stay under the mouse. */
+  const Peek = (() => {
+    const mouse = window.matchMedia ? matchMedia('(hover: hover) and (pointer: fine)') : { matches: false };
+    let el, img, items = [], at = 0, anchor = null, showT, hideT;
+    function build() {
+      el = document.createElement('div');
+      el.className = 'peek'; el.hidden = true;
+      el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Photo preview');
+      el.innerHTML = `<div class="peek-img"><img alt="" draggable="false">
+          <button type="button" class="g-btn peek-prev" aria-label="Previous">‹</button>
+          <button type="button" class="g-btn peek-next" aria-label="Next">›</button></div>
+        <div class="peek-bar"><span class="peek-count"></span><span class="peek-cap"></span><span class="peek-hint">Click to enlarge</span></div>`;
+      document.body.appendChild(el);
+      img = $('img', el);
+      el.addEventListener('pointerenter', () => clearTimeout(hideT));
+      el.addEventListener('pointerleave', () => hideSoon());
+      $('.peek-prev', el).onclick = () => step(-1);
+      $('.peek-next', el).onclick = () => step(1);
+      img.onclick = () => { const set = items, i = at; hide(); openGallery(set, i); };
+      document.addEventListener('keydown', e => {
+        if (el.hidden) return;
+        if (e.key === 'Escape') hide();
+        else if (e.key === 'ArrowLeft') step(-1);
+        else if (e.key === 'ArrowRight') step(1);
+      });
+      window.addEventListener('scroll', () => hide(), { passive: true });
+      window.addEventListener('resize', () => hide());
+    }
+    function draw() {
+      const f = items[at];
+      img.src = thumbSrc(f.id) || '';   // the preview at once, the full photo when it arrives
+      img.alt = f.caption || f.name || '';
+      fullImage(f.id).then(src => { if (!el.hidden && items[at] === f) img.src = src; }).catch(() => {});
+      $('.peek-count', el).textContent = `${at + 1} / ${items.length}`;
+      $('.peek-cap', el).textContent = f.caption || f.name || '';
+      $('.peek-prev', el).disabled = at === 0;
+      $('.peek-next', el).disabled = at === items.length - 1;
+    }
+    function place() {
+      const r = anchor.getBoundingClientRect(), vw = document.documentElement.clientWidth, vh = window.innerHeight, m = 12, gap = 14;
+      const right = vw - r.right - gap - m, left = r.left - gap - m, room = Math.max(right, left);
+      const beside = room >= 320;
+      const w = Math.round(Math.min(760, beside ? room : vw - 2 * m)), h = Math.round(Math.min(w * 0.75 + 40, vh - 2 * m));
+      const x = !beside ? (vw - w) / 2 : right >= left ? r.right + gap : r.left - gap - w;
+      const y = Math.min(Math.max(m, r.top + r.height / 2 - h / 2), vh - h - m);
+      Object.assign(el.style, { width: w + 'px', height: h + 'px', left: Math.round(x) + 'px', top: Math.round(y) + 'px' });
+    }
+    function show(a, set) {
+      if (!el) build();
+      clearTimeout(hideT);
+      anchor = a; items = set; at = Math.max(0, set.findIndex(f => f.id === a.dataset.gal));
+      el.hidden = false;
+      place(); draw();
+    }
+    function step(d) {
+      const i = Math.max(0, Math.min(items.length - 1, at + d));
+      if (i !== at) { at = i; draw(); }
+    }
+    function hide() { clearTimeout(showT); clearTimeout(hideT); if (el) { el.hidden = true; img.removeAttribute('src'); } }
+    function hideSoon() { clearTimeout(showT); clearTimeout(hideT); hideT = setTimeout(hide, 220); }
+    function bind(a, set) {
+      if (!set.length) return;
+      a.addEventListener('pointerenter', e => {
+        if (e.pointerType !== 'mouse' || !mouse.matches || document.querySelector('.gallery')) return;
+        clearTimeout(showT); clearTimeout(hideT);
+        // a short pause first, so sweeping the mouse across the grid doesn't flash previews
+        showT = setTimeout(() => { if (a.isConnected) show(a, set); }, el && !el.hidden ? 60 : 350);
+      });
+      a.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') hideSoon(); });
+    }
+    return { bind, hide };
+  })();
 
   /* ================================================================
    *  PDF REPORT
@@ -1805,7 +1897,7 @@
             <button class="btn btn-ghost btn-sm" id="aPdf">⬇ PDF report</button></div></div>
           <div class="card"><h2>Photographs (${r.files.filter(f => f.kind === 'photo').length})</h2><div class="thumbs" id="thumbs"></div></div>
           <div class="card"><h2>Videos (${r.files.filter(f => f.kind === 'video').length})</h2><ul class="files" id="videoList"></ul></div>
-          <div class="card"><h2>Documents</h2><ul class="files" id="docList"></ul></div>
+          <div class="card"><h2>Documents</h2><div class="thumbs" id="docThumbs" hidden></div><ul class="files" id="docList"></ul></div>
         </div>
       </div>`;
     $('#back').onclick = () => renderAdminDetail(email);

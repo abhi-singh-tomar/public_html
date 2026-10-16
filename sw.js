@@ -2,7 +2,7 @@
  * Caches the app shell so it opens instantly and installs as an app.
  * API calls (script.google.com) are never cached.
  * Bump VERSION whenever you deploy changed files. */
-const VERSION = 'pbj-v2.2.0';
+const VERSION = 'pbj-v2.3.0';
 const SHELL = [
   './', 'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/logo-480.png', 'icons/favicon-32.png', 'icons/apple-touch-icon.png'
