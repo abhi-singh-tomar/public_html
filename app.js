@@ -90,6 +90,7 @@
     $('#brandSub').textContent = CFG.APP_SUBTITLE;
     $('#demoBanner').hidden = !DEMO;
     setupMenu();
+    setupBackButton();
     setupInstall();
     setupZoomPins();
     // app-like: no page zoom. iOS Safari ignores user-scalable=no, so stop its pinch gesture here.
@@ -161,6 +162,24 @@
       finally { busy(false); }
     }
     route();
+  }
+
+  /** The phone's Back button does what the screen's own back button does, instead of leaving the app.
+   *  While a screen has a back button, one extra history entry is kept; Back pops it and we press that button.
+   *  On the top screen there is no entry, so Back leaves the app as usual. */
+  function setupBackButton() {
+    const BACK = '#backList, #back, #backLogin2, #pCancel, #toAdmin';
+    const arm = () => {
+      const st = history.state;
+      if (!(st && (st.pbjApp || st.pbjGallery)) && $(BACK, app)) history.pushState({ pbjApp: 1 }, '');
+    };
+    new MutationObserver(arm).observe(app, { childList: true });
+    window.addEventListener('popstate', e => {
+      if (e.state && (e.state.pbjApp || e.state.pbjGallery)) return;   // a layer above (the gallery) closed itself
+      $('#menu').hidden = true;
+      const b = $(BACK, app);
+      if (b) { b.click(); arm(); }
+    });
   }
 
   function setupMenu() {
